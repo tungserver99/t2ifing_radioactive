@@ -1,0 +1,24 @@
+{
+  "conditions": [
+    "C01_step1.00_seed0_author",
+    "C11_step1.00_seed0_author"
+  ],
+  "gpu": 1,
+  "mild_jobs": 0,
+  "dependency": "verified author teacher_detection.json + frozen threshold, then run alongside raw controls on GPU0",
+  "C01_data": "reuse audited existing clean strong regeneration: identical clean sources/backbone",
+  "C11_data": "fresh CtrlRegen+ on author-key WM train/val; strength1.00; train seed10000+i, val seed20000+i",
+  "training": "fresh SD1.4 LoRA rank4 LR1e-5 batch8 seed0 20000steps; corrected clipping",
+  "evaluation": "1000 condition-specific validation MSE; 5000 outputs; common fixed author threshold; CLIP/FID/KID",
+  "authorization": "user explicitly requested C01/C11 queued before baseline review; exploratory if C10 remains weak",
+  "selection": "strong1.00 retained from prior preservation-based policy; no downstream detector tuning",
+  "frozen_sources": {
+    "/root/workspace/serum/third_party/diffusers/examples/text_to_image/train_text_to_image_lora.py": "18c712a5b4aa1f47f3221ee0ea5a98758f02f35ac76f753bd5ad2bdf07e98534",
+    "/root/workspace/serum/scripts/launder_ctrlregen.py": "3e66c1d95641222c02522b5af6c8e7d7ed4864cd78f061e72174ede7afc6fe63",
+    "/root/workspace/serum/scripts/select_lora_checkpoint.py": "4bb2b2e341e00389f2f3c30ccd86c848a0973bf0282bdfdbfbe29b0a419746df",
+    "/root/workspace/serum/scripts/generate_student.py": "5b5bd9aa646df9a2c20b8eaafe6725bcc7ebd2bbaef07772f99ef898a3e70704",
+    "/root/workspace/serum/scripts/audit_author_student.py": "680130a7346f160518e310eb76578edf77bd575a9b7f200f0f2b3496aeef9e62",
+    "/root/workspace/serum/scripts/student_utility.py": "0468a32a94b8995c8113a8933ca6ce76f348391cf6ab54b75f4d33d897be51e9",
+    "/root/workspace/serum/assets/serum_author/manifest.json": "4a48a292ba85372c51eb82a2685f596d9429e5202aa0bf60dcc2dc78c235cd52"
+  }
+}

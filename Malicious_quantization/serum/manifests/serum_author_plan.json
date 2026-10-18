@@ -1,0 +1,40 @@
+{
+  "branch": "author_SD21_key",
+  "conditions": [
+    "C00_seed0_author",
+    "C10_seed0_author",
+    "C01_step1.00_seed0_author",
+    "C11_step1.00_seed0_author"
+  ],
+  "raw_controls_only": false,
+  "mild_jobs": 0,
+  "dependency": "none; user cancelled previous core and switched artifacts",
+  "source_files": {
+    "/root/workspace/serum/third_party/diffusers/examples/text_to_image/train_text_to_image_lora.py": "18c712a5b4aa1f47f3221ee0ea5a98758f02f35ac76f753bd5ad2bdf07e98534",
+    "/root/workspace/serum/scripts/author_serum_stage0.py": "97cec8f699e12ccffb102876c9ba9d7b1b65edbe4f2639c96b5e674b3269e822",
+    "/root/workspace/serum/scripts/select_lora_checkpoint.py": "4bb2b2e341e00389f2f3c30ccd86c848a0973bf0282bdfdbfbe29b0a419746df",
+    "/root/workspace/serum/scripts/generate_student.py": "5b5bd9aa646df9a2c20b8eaafe6725bcc7ebd2bbaef07772f99ef898a3e70704",
+    "/root/workspace/serum/assets/serum_author/manifest.json": "4a48a292ba85372c51eb82a2685f596d9429e5202aa0bf60dcc2dc78c235cd52"
+  },
+  "prompts": {
+    "detector_calib.txt": "757fdbc79c68205a3ac255c23bcbc444dc6f535c56beb4835771f68d83ab2c3d",
+    "student_eval.txt": "29aa2341e42951d2ed135f73909ae19191019af6e3b56c0a891e3481e5ada23f",
+    "adapt_val.txt": "9c6f463004a2b3480e19090546a6a925bb69ce369714e59a8e0ba0bcbc9ae67b",
+    "adapt_train.txt": "3fec5b053b4241fb4a520ce4a91c0d2bed78939c12153ab4f33b68cf529af55c"
+  },
+  "teacher": "authors SD2.1 cache + epoch50 key/detector; alpha0.5; 50steps CFG7.5; prompt-paired legacy clean reuse after exact backbone equivalence",
+  "teacher_images": 22000,
+  "new_watermarked_images": 11000,
+  "reused_clean_images": 11000,
+  "threshold": "separate author detector calibration on reused equivalent-backbone 5000 clean images; 1% FPR; fixed thereafter",
+  "training": "SD1.4 LoRA rank4, LR1e-5, batch8, seed0, 20000 total steps, corrected clipping; C00 resumes corrected clean checkpoint, C10 starts fresh",
+  "selection": "minimum denoising MSE on 1000 condition-specific validation images",
+  "evaluation": "5000 outputs per control, shared prompts and seeds; author detector+VAE+fixed author threshold",
+  "next_gate": "User authorized strong conditions without waiting for baseline review. Review baseline validity when interpreting results; extra seeds/defenses remain conditional.",
+  "recipe_limit": "author artifacts supplied; exact paper LoRA recipe remains unavailable",
+  "execution_roles": {
+    "GPU0": "quant-author-queue: resumed C00 then fresh C10",
+    "GPU1": "quant-author-strong: reused-clean-data C01 then author-WM-data C11; waits for teacher calibration"
+  },
+  "strong_plan": "/root/workspace/serum/manifests/serum_author_strong_plan.json"
+}

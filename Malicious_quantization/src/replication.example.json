@@ -1,0 +1,16 @@
+{
+  "development_runs": ["/path/to/output_attack/development_run"],
+  "prompts": "/path/to/final_prompts.txt",
+  "seeds": [7301, 8301, 9301],
+  "budget_psnr": 30.0,
+  "budget_ssim": 0.9,
+  "assets": [
+    {
+      "id": "new_marked_key_1",
+      "model": "/path/to/new_marked_diffusers_pipeline",
+      "key": "REPLACE_WITH_ACTUAL_48_BIT_KEY_OF_THIS_CHECKPOINT",
+      "extractor": "/path/to/owner_extractor.pt",
+      "extractor_sha256": "REPLACE_WITH_VERIFIED_EXTRACTOR_SHA256"
+    }
+  ]
+}

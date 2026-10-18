@@ -1,0 +1,96 @@
+{
+  "bitmark": {
+    "repository": "https://github.com/sprintml/BitMark",
+    "commit": "dd21db32dc86ac70526229e678a027cc06f5c296",
+    "files": "Infinity plus official wrapper, detector and helper; local patches listed below",
+    "infinity_original_sha256": "e7a1a74ed26a42d806d4dfe2629078ff7079524a861c714dd1a3eb6480bf2eba",
+    "patches": [
+      "Guard optional bit-flip statistics and reset them per scale; no changes to watermark sampling or RNG calls."
+    ]
+  },
+  "diffusers": {
+    "repository": "https://github.com/huggingface/diffusers",
+    "commit": "0f252be0ed42006c125ef4429156cb13ae6c1d60",
+    "version": "0.35.1",
+    "lora_original_sha256": "3dcc88d582bb9f20d4e72278f0a76749a1190ed43a6521b2cdb297efa512136a",
+    "full_original_sha256": "729effb6c59cb7a1e5807665a271a0098559ae8e530f115894ea7a80c0ab214b",
+    "patches": [
+      "Materialize LoRA parameters for repeated gradient clipping (SERUM fix).",
+      "Both trainers: map CLI report_to=none to Python None for Accelerate 1.10 (no remote trackers).",
+      "Inference-only snapshots at predeclared steps; no detector feedback in trainer.",
+      "Configurable attention / attention+Conv2d PEFT LoRA targets and parameter audit.",
+      "Save PEFT-native adapter state/config for reliable mixed Linear+Conv2d reload.",
+      "Optional PEFT use_dora for Linear+Conv2d magnitude/direction adaptation; audit magnitude parameter count. Native PEFT serialization preserved.",
+      "Full trainer final export explicitly disables optional safety_checker and uses local cache, matching experiment inference.",
+      "LoRA trainer records attempted/applied/AMP-skipped optimizer updates per invocation and at inference snapshots."
+    ]
+  },
+  "files": {
+    "bitmark/Infinity/LICENSE": "a318f4da9d043e05f535b65774febde7572908c97562cc14e49a2f3687f5a453",
+    "bitmark/Infinity/environment.yml": "0096faa4dcccc1ef4d73e908820793321dd8f99129687df0191aabf5ef70e50e",
+    "bitmark/Infinity/finetune_for_radioactivity.sh": "396680304bfb24dbe35a7e58189ed26a27cd641c0ce83dc9e35d9ab4fc68d59d",
+    "bitmark/Infinity/finetune_jsonl_example/1.000_0001000.jsonl": "b9ef0091702cc5a31f61d21eeda16617040087af3f777c0b0cf99052555a2506",
+    "bitmark/Infinity/flipper.py": "e34c10b30f262eb2e2b2286dec3727f0845fb22a1f6b29cab5193f3f89d52187",
+    "bitmark/Infinity/infinity/dataset/build.py": "da96bc07fadf531ff06d87a211484a94062c173f48750552a3568f2e909d2c95",
+    "bitmark/Infinity/infinity/dataset/dataset_t2i_iterable.py": "623b1ec6be6d63c046b3d444aadb77468a80e7a59eb9b5f08a5da14611841e7c",
+    "bitmark/Infinity/infinity/models/__init__.py": "614ee812eb00ed4adf442957b87f45eb853f9db55f71fbc744a9bd400f80f4a6",
+    "bitmark/Infinity/infinity/models/basic.py": "4bc2e733a0721268eba5ec6f682d71ab5fb251cb757d7d05e42bd65ec2dac042",
+    "bitmark/Infinity/infinity/models/bitwise_self_correction.py": "8978f155843d4bcf99b1413831f35eec75c31d0ec171ea37a8283e9c6a04ffe5",
+    "bitmark/Infinity/infinity/models/bsq_vae/conv.py": "db649dc412437e40d357b7eac10e9784383ab8815d6ef57537ac2350a0c3489d",
+    "bitmark/Infinity/infinity/models/bsq_vae/dynamic_resolution.py": "d399f50262e44d56b5de9d07107f3893c05f567e428734ef20b68b843f8dd2a3",
+    "bitmark/Infinity/infinity/models/bsq_vae/flux_vqgan.py": "5a1922a4d1058ff50d784a9a404abdef6f17ac124cd345cbe5bd926cc47c5bb1",
+    "bitmark/Infinity/infinity/models/bsq_vae/multiscale_bsq.py": "cfe99a0baf056bf1e58a21a1811a397c7ad816e90c8e1c9f127603c80d7d85ba",
+    "bitmark/Infinity/infinity/models/bsq_vae/vae.py": "d0854ee9b5c50f27970e439a57fb74b77a062bec78a7c482610d03482a81c845",
+    "bitmark/Infinity/infinity/models/ema.py": "f1774f473801808706a30ee7c0a69bf260b68e9f638680019e30f605f27f5e42",
+    "bitmark/Infinity/infinity/models/flex_attn.py": "d39f7da07caa6f80cd40e16e2781da3aa80a1fd5850de0a8d40fac36e1afe65d",
+    "bitmark/Infinity/infinity/models/fused_op.py": "6caad7599d668551b9591cda68d85f831cc54f8a818780bdc7c2972a97bb49d4",
+    "bitmark/Infinity/infinity/models/infinity.py": "dc64ef92616b65b4b6793f3a8fa5f3799f33425e47e6c3ec099fced7ecff10af",
+    "bitmark/Infinity/infinity/models/init_param.py": "4b3aea2c8129fa2c1572bd6ff6d7856c4b7d5ff8ffbf82e3b0924a47579a60bf",
+    "bitmark/Infinity/infinity/models/t5.py": "010ffd847b909800597f1b7572eb828fe5f57e8e3e65fdd03a872e00eb63e6f1",
+    "bitmark/Infinity/infinity/utils/amp_opt.py": "65f9d0f5602a155236ebebaeb452d105b619125888a996814c8310f11ddfc9c7",
+    "bitmark/Infinity/infinity/utils/arg_util.py": "0afbf4ab218d44788d16ea17e98ce92dfa35c7587a934f8e0757814ccaca985f",
+    "bitmark/Infinity/infinity/utils/csv_util.py": "b30d5f27c20e208b4463368342305d7a7ef32a7d129b26148c97e2a75a509bd4",
+    "bitmark/Infinity/infinity/utils/dist.py": "faed14c23b41c3223a084c3c2520442b622cf323a02208cd77a291881d70cfa2",
+    "bitmark/Infinity/infinity/utils/dynamic_resolution.py": "08f862fcf3f326e35c38a730e4bec817544a00b2a0801dccacb3c5d3744c5efc",
+    "bitmark/Infinity/infinity/utils/large_file_util.py": "05665d73332e478408cd351e7b81312bb1125f6c1c56cfb16c154e4de331c493",
+    "bitmark/Infinity/infinity/utils/load.py": "c73e13661672d8340978c8b0f4626ca7316068e2a54c77aafd2f72db1f23d56e",
+    "bitmark/Infinity/infinity/utils/lr_control.py": "d9e5c95b15dba4603da68032010fd0d417452186a71a839729dd8a5782d31506",
+    "bitmark/Infinity/infinity/utils/misc.py": "c228ff4eb31a7239f835704b17f17113dbfcea0580fcd230074908b8d2c64d21",
+    "bitmark/Infinity/infinity/utils/save_and_load.py": "e2d10bc8c13c45133d920e580930537e11443eac6f3d8d9cc17e9e1641d4926d",
+    "bitmark/Infinity/infinity/utils/wandb_utils.py": "6468465eb650f31807cb087ce33d2faaf90a22851f55ee3e7adff584856784dd",
+    "bitmark/Infinity/requirements.txt": "dbc787b478617a1f6221f9b1151781b8f68b504321be76f7e40abd73cc6f3ef6",
+    "bitmark/Infinity/tools/run_infinity.py": "e0cbe90656a25f343a8af4e39c130d8b02e6dd7e79e5297985fe10028f581003",
+    "bitmark/Infinity/tools/run_tokenizer.py": "a1399f9de0927a51e842c839a2b15e275d10ff42dfba3f04683912fae9222ef8",
+    "bitmark/Infinity/tools/scales_injector.py": "08f59865628ae15cd92fd3d35bc6930d17727d3c899a21700833f0b0d7161e38",
+    "bitmark/Infinity/train.py": "48d73d1c6edd36b4775e6025fef5c58e7b59434d158b1695b47b8318e904311e",
+    "bitmark/Infinity/trainer.py": "e188ab2f6cb8d73001f69fcbd149b8c53e7bee1cd9d7d0261c43b18d61d97edb",
+    "bitmark/LICENSE": "9e4b574ed3de427b13172804595f85888c256bbc5f1a9edfe11f584d569b12d9",
+    "bitmark/architecture_wrapper.py": "7f2ab54f06ac21c3ed8194599a387567159114b59685b949cd17d596b866902f",
+    "bitmark/detect_watermark.py": "d85fbeeda50ca0965d345abe130a1f1fe8f1fa4579ce189fe711ae4bbdaca70e",
+    "bitmark/extended_watermark_processor.py": "6feb414b41a9cbc488050be3943c44e4e163e6fbfdc2a60d4438e264447df69c",
+    "bitmark/helper.py": "c867f2a69a2c93a677b31b3e1c462d65816daf95cbb5b6931c6c402904ff2241",
+    "diffusers/LICENSE": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+    "diffusers/train_text_to_image.py": "7973d4683f714d2b2ebf0dced77431013c0c5840a7b05d56ab5e6a814aa00a7f",
+    "diffusers/train_text_to_image_lora.py": "bf72739025211529e2ae236bd0340fe7de21726fd73f32caee70edc456bbc91e",
+    "serum/watermark.py": "f36e6f2553b136cc4ec8f8d075d1a68dc35ab414720ebcc385b1011d5c226086",
+    "serum/config.py": "76ba6defacc7806581fafb3ee22f02d561e363443afc976aba0c26ff6f06fcc4",
+    "serum/__init__.py": "855cf431720505996c5d617141a3d5af9730c04587cb1f711877c5456bd82a27",
+    "serum/score_model.py": "c3593dd4cca9a6cd66b4db473fef10d10a575e8c2218ed5834d3d1c3d0463615",
+    "serum/cleanup.py": "689b643bd4d6b9c662aa07586b4e9919a11f820a2e567e08280af8f2d085f0bd",
+    "serum/config_sd21.yaml": "34aebdf2414f39e37278dce60758665467d3b6b27450b3e3b8938c2452668e65"
+  },
+  "serum": {
+    "repository": "https://github.com/Hubizon/SERUM",
+    "commit": "02f4929e30cd976c5cfe65a45ef1bc4ac79bdfed",
+    "original_sha256": {
+      "src/models/watermark.py": "62eacdb9cd757f26d7317cf2116634471548a00662341e747d74c674e53d90b3",
+      "src/models/score_model.py": "80cf8ee202a1eaa0a1f045ab8b0061cde74f8007a55ad61f13b14775397dbcdf",
+      "src/utils/config.py": "f36531dca42b74ece58147c7e0e5576f91b6f60957f1da76c879a213678e1637"
+    },
+    "patches": [
+      "Only redirect config/cleanup imports to avoid optional training dependencies. Watermark and detector forward methods unchanged.",
+      "Author SD2.1 configuration copied from verified prior experiment; runtime paths overridden.",
+      "Strip trailing whitespace from vendored Python files; no semantic changes."
+    ]
+  }
+}

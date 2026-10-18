@@ -1,0 +1,28 @@
+{
+  "command": [
+    "/root/workspace/serum/.venv-student/bin/python",
+    "-m",
+    "accelerate.commands.launch",
+    "--num_processes",
+    "1",
+    "scripts/train_full_sd14.py",
+    "--pretrained_model_name_or_path=CompVis/stable-diffusion-v1-4",
+    "--train_data_dir=/root/workspace/serum/data/serum_author/hf/C11_step1.00_train",
+    "--image_column=image",
+    "--caption_column=text",
+    "--resolution=512",
+    "--train_batch_size=8",
+    "--gradient_accumulation_steps=1",
+    "--learning_rate=5e-6",
+    "--lr_scheduler=constant",
+    "--lr_warmup_steps=0",
+    "--max_train_steps=20000",
+    "--checkpointing_steps=1000",
+    "--mixed_precision=fp16",
+    "--seed=0",
+    "--max_grad_norm=1.0",
+    "--output_dir=/root/workspace/serum/students/C11_full_step1.00_seed0_author"
+  ],
+  "metadata_sha256": "8861e92220f5992d9d4e6a8529b18625825103332c02f0a8ac3ec9d8b45828e1",
+  "threshold_sha256": "8ad12a11d02bdaa35a6313e88ca2e089dd70ab7b58df8cc45279e43722a9fe30"
+}

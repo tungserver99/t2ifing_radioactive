@@ -1,0 +1,2 @@
+# Source hashes are calculated on upstream LF bytes, including on Windows.
+* text eol=lf

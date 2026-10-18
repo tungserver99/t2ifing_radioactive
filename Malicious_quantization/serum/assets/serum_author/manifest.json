@@ -1,0 +1,23 @@
+{
+  "source": "https://github.com/Hubizon/SERUM/issues/1#issuecomment-4963328577",
+  "checkpoint_url": "https://drive.google.com/file/d/12NTXeyIMFX1NWYzCJDeRX54T7BgEvXuQ/view",
+  "cache_url": "https://drive.google.com/file/d/17MFAZ2rsmaIlRNghzTbShLE73t6QCCrN/view",
+  "checkpoint_sha256": "e991a694342545fa4f59cc5b3c94b6e3a93bf831dd4d507207f52d1c167c05c4",
+  "checkpoint_epoch": 50,
+  "models": {
+    "score_model": {
+      "path": "/root/workspace/serum/assets/serum_author/score_model.pt",
+      "sha256": "fbb7002fc401c5e638f832d0d28b17403b6620d86b71edca03dccb4b75ffaf4a"
+    },
+    "watermark": {
+      "path": "/root/workspace/serum/assets/serum_author/watermark.pt",
+      "sha256": "1e827973e2d8304cb35a2e9ce542483d0a0810984b10da30362cad35adceb576"
+    }
+  },
+  "config": "/root/workspace/serum/assets/serum_author/config_sd21_author.yaml",
+  "status": "verified",
+  "cache_zip_sha256": "95877f6ab0305b92897c5f6fdba7fcd373b9031728f3e69599ffebfb6d2bc593",
+  "snapshot": "/root/workspace/serum/assets/serum_author/original_cache/models--stabilityai--stable-diffusion-2-1-base/snapshots/5ede9e4bf3e3fd1cb0ef2f7a3fff13ee514fdf06",
+  "model_file_count": 13,
+  "config_sha256": "34aebdf2414f39e37278dce60758665467d3b6b27450b3e3b8938c2452668e65"
+}

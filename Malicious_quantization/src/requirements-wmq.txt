@@ -1,0 +1,19 @@
+--index-url https://pypi.org/simple
+--extra-index-url https://download.pytorch.org/whl/cu128
+
+torch==2.7.1+cu128
+torchvision==0.22.1+cu128
+diffusers==0.35.1
+transformers==4.56.2
+accelerate==1.10.1
+huggingface-hub==0.34.4
+safetensors==0.6.2
+peft==0.17.1
+tokenizers==0.22.0
+lpips==0.1.4
+scipy==1.15.3
+pillow==11.3.0
+numpy==1.26.4
+clean-fid==0.1.35
+gdown==5.2.0
+ftfy==6.3.1

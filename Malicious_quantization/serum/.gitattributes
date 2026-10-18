@@ -1,0 +1,2 @@
+# Preserve exact server bytes, including Linux shell scripts and source hashes.
+* -text

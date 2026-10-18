@@ -1,0 +1,23 @@
+{
+  "conditions": [
+    "C11_full_step1.00_seed0_author",
+    "C10_full_seed0_author"
+  ],
+  "adaptation": "all UNet parameters; frozen VAE/text encoder; no EMA",
+  "steps": 20000,
+  "batch": 8,
+  "lr": 5e-06,
+  "seed": 0,
+  "checkpoint_interval": 1000,
+  "checkpoint_selection": "minimum unseen denoising MSE; all 20 snapshots plus final; no detector feedback",
+  "storage": "retain all UNets; optimizer only at latest checkpoint; older checkpoints cannot resume training",
+  "frozen": {
+    "scripts/train_full_sd14.py": "cb3f6f5e354ce04c7b02c23fe1fdbcdb2a4f809fb91e311071574a6521843f2e",
+    "scripts/select_full_checkpoint.py": "993dbf3dfdb7225590d38928d9b7c178db11e16dfec4b96aab72410786aefcb7",
+    "scripts/generate_full_student.py": "f1ea800d7c4e1ed27ee875f8142145a019d06143df71eb97a74510da654da2fe",
+    "scripts/audit_full_student.py": "867480000b937b7a9ab3ceef4c993024ba5c034d9568ec53d92fc0c156c3d710",
+    "scripts/student_utility.py": "0468a32a94b8995c8113a8933ca6ce76f348391cf6ab54b75f4d33d897be51e9",
+    "metrics/serum_author/threshold_1pct.json": "8ad12a11d02bdaa35a6313e88ca2e089dd70ab7b58df8cc45279e43722a9fe30"
+  },
+  "execution_order": "C11 strong, then C10 raw; smoke uses C11 data"
+}

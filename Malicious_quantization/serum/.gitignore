@@ -1,0 +1,12 @@
+.venv*/
+data/
+students/
+student_outputs/
+metrics/
+logs/
+third_party/CtrlRegen/public_checkpoints/
+assets/**/*.pt
+assets/**/*.zip
+assets/**/sd21_snapshot/
+*.pem
+__pycache__/

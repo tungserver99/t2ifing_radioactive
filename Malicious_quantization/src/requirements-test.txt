@@ -1,0 +1,5 @@
+# Optional reference metric used only for the numerical SSIM audit.
+scikit-image==0.25.2
+# Keep the project's NumPy pin; newer tifffile releases require NumPy 2.
+numpy==1.26.4
+tifffile==2024.9.20

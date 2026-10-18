@@ -1,0 +1,18 @@
+{
+  "source": "/root/workspace/serum/third_party/diffusers/examples/text_to_image/train_text_to_image_lora.py",
+  "before_sha256": "af45703df753ed6321a037ecd1ffde65b6081d46f0ad5f31bc9ca78ec6e786bc",
+  "after_sha256": "18c712a5b4aa1f47f3221ee0ea5a98758f02f35ac76f753bd5ad2bdf07e98534",
+  "change": "Materialize trainable LoRA parameters so optimizer construction does not exhaust gradient clipping input",
+  "accelerate_clipping_two_steps": [
+    {
+      "norm_before": 100.0,
+      "gradient_after": 1.0
+    },
+    {
+      "norm_before": 100.0,
+      "gradient_after": 1.0
+    }
+  ],
+  "existing_runs": "Unmodified; all six seed-0 students were trained before this fix",
+  "causal_effect_on_tpr": "Unknown; requires controlled rerun"
+}
