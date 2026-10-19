@@ -10,7 +10,7 @@ bash run_semantic_fp.sh
 
 The launcher calls `python main.py` without environment activation or automatic installation. The default is the pilot; `--setting full` enables all six student branches, and `--plan-only` prints the protocol without GPU work.
 
-Runs and logs are saved beside `main.py` in `run_semantic_fp_*/logs/`. Teacher training defaults to microbatch1 accumulated to effective batch4, with activation checkpointing for the differentiable reference/cycle path.
+Runs and logs are saved beside `main.py` in `run_semantic_fp_*/logs/`. Teacher training defaults to BF16 with an early numerical readiness check, and microbatch1 accumulated to effective batch4, with activation checkpointing for the differentiable reference/cycle path.
 
 - [Full usage and environment requirements](README_semantic_fp.md)
 - [Method specification](native_semantic_radioactive_fingerprint_codex_spec.md)

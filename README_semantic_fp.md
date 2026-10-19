@@ -23,6 +23,13 @@ bash run_semantic_fp.sh --setting full
 # Teacher-only alpha sweep, selected by held-out teacher validation and quality.
 bash run_semantic_fp.sh --semantic-shift-sweep 0.25 0.5 0.75
 
+# Diagnose the latest saved teacher adapter of a failed run, without regenerating data.
+# Defaults to teacher BF16 and 32 diagnostic optimizer updates; no training resume.
+python main.py --teacher-check run_semantic_fp_YYYYMMDD_HHMMSS_...
+
+# Compare the same saved adapter/seed using FP32 if BF16 diagnostics still fail.
+python main.py --teacher-check run_semantic_fp_YYYYMMDD_HHMMSS_... --teacher-precision no
+
 # Independent training seed; key stays the same unless explicitly changed.
 bash run_semantic_fp.sh --setting full --seed 1
 
@@ -33,7 +40,7 @@ bash run_semantic_fp.sh --resume run_semantic_fp_YYYYMMDD_HHMMSS_...
 python main.py --analyze run_semantic_fp_YYYYMMDD_HHMMSS_...
 ```
 
-`python main.py --help` exposes all settings, including teacher loss weights, alpha, key seed, PCA range, teacher rank/budget/batches, semantic timestep mask and student branch choices. PC 8..64 is **zero-based and inclusive**. Defaults: 8 bits chosen from the 16 clean VAE-cycle-stable PCs, alpha 0.5, teacher rank32 attention+Conv, LR1e-4, 3000 steps, batch4. Teacher training uses microbatch1 with gradient accumulation to preserve effective batch4 and one optimizer update per step. `--teacher-micro-batch` changes the forward batch size without changing `--teacher-batch`. Differentiable reference feature extraction and VAE-cycle paths use activation checkpointing, trading extra recomputation for lower retained activation memory. Losses retain full-batch normalization, including the semantic timestep mask. Each training log records effective/micro batch and peak allocated GPU memory. Fingerprint loss ramps from step250 to750. Preservation applies to every sampled timestep; semantic losses apply only at t<=500. Raw losses, mask fractions and gradient norms are logged. Finite checks fail before optimizer updates or result serialization.
+`python main.py --help` exposes all settings, including teacher loss weights, alpha, key seed, PCA range, teacher rank/budget/batches, semantic timestep mask and student branch choices. PC 8..64 is **zero-based and inclusive**. Defaults: 8 bits chosen from the 16 clean VAE-cycle-stable PCs, alpha 0.5, teacher rank32 attention+Conv, LR1e-4, 3000 steps, batch4. Teacher autocast defaults to BF16 (requires GPU support); --teacher-precision selects bf16/fp16/no independently of the unchanged student --precision fp16 setting. Teacher training uses microbatch1 with gradient accumulation to preserve effective batch4 and one optimizer update per step. `--teacher-micro-batch` changes the forward batch size without changing `--teacher-batch`. Differentiable reference feature extraction and VAE-cycle paths use activation checkpointing, trading extra recomputation for lower retained activation memory. Losses retain full-batch normalization, including the semantic timestep mask. Each training log records effective/micro batch and peak allocated GPU memory. Fingerprint loss ramps from step250 to750. Preservation applies to every sampled timestep; semantic losses apply only at t<=500. Raw losses, mask fractions and gradient norms are logged. Finite checks fail before optimizer updates or result serialization.
 
 Downstream defaults are the specified Serum comparison: disjoint COCO prompt counts 5000 train /1000 validation /5000 calibration /1000 test; 7500 steps; snapshots2500/5000/7500; batch8; LoRA/DoRA LR1e-5; full LR5e-6; FP16; resolution512; inference50 steps/CFG7.5. Full includes attention r16/r32, attention+Conv r16/r32, DoRA attention+Conv r32, full UNet. Student training, `validation.py` and the vendored trainers retain their existing logic. For semantic runs, student image generation shares the ordinary native decoding helper solely to fail on nonfinite outputs before PNG conversion; prompts, seeds, sampler and adaptation are unchanged. Detection and quality diagnostics never select student checkpoints: only held-out denoising MSE, with earlier-step tie break.
 
@@ -46,6 +53,16 @@ The default clean teacher is the SD2.1 base mirror already pinned by this checko
 The extractor is FP32 and frozen, including VAE/text/reference UNet. It uses posterior **mean**, scaled latents, t_probe=0, spatially averaged mid-block output and an inferred channel dimension. Teacher optimization preserves input gradients through these frozen components. The cycle loss decodes, clips to the normal image range, mean-encodes and extracts features again. This differentiable cycle omits PNG quantization; candidate validation scores actual saved PNGs.
 
 Teacher adapters are trained from the same clean teacher and seed for every alpha. Each candidate is merged, saved and reloaded as a standard pipeline, with an FP32 output-equivalence assertion (atol/rtol1e-4). Any remaining PEFT layer or nonfinite tensor fails the stage. The selected native generation path loads only model weights and ordinary prompt/generator inputs, with no key, inference hooks or custom input `latents` argument. It requests the standard pipeline final latent output, checks finiteness, and uses the original VAE and Diffusers image conversion to save ordinary PNGs; this adds no watermark transform.
+
+## Numerical readiness and failure diagnostics
+
+Before each fresh teacher candidate trains, 12 diagnostic optimizer updates use the real frozen extractor, carrier and teacher objective at full loss ramp. They cover t=0, t=250, t=500 and t=501 at the default mask, then reproducibly sampled masked timesteps/noise. Every eligible probe enables cycle loss. These updates use a separate fresh AdamW optimizer; trainable weights and PyTorch CPU/CUDA RNG states are restored even if a probe fails. They do not count toward or alter the 3000-step training budget.
+
+--teacher-check RUN loads the latest numeric checkpoint for each candidate (or the finished adapter), reuses verified clean training data/carrier and performs 32 diagnostic updates. It does not regenerate images, resume the optimizer, modify old checkpoints, or bypass frozen training provenance. Checkpoints from the old code do not contain optimizer state; this is a numerical probe with a fresh optimizer, not an exact replay of the failing step. Increase --teacher-check-steps for a longer probe. Reports and source/adapter hashes are written under RUN/diagnostics/teacher_check_*/. An FP32 diagnostic can distinguish a mixed-precision-specific failure from instability that also appears in FP32, but success on sampled inputs cannot certify every later batch.
+
+Teacher BF16 runs do not use FP16 loss scaling. Both the probe and main training reject actual nonfinite gradients before updating weights. Gradient norms are reduced in FP64 to distinguish real invalid gradients from overflow of an FP32 sum of squares, then clipped to 1.0. Failure reports include precision, step/probe, timestep, microbatch losses and offending parameter names where available. Backward hooks identify the teacher-output, predicted-x0, semantic-feature or cycle boundary at which nonfinite gradients appear. No invalid gradient is replaced with zero and no training update is silently skipped. A readiness pass does not guarantee long-run stability. Runtime checks remain active.
+
+For a new BF16 training experiment, create a new run. Strict resume of an older frozen FP16 run is not a precision migration.
 
 ## Gates and artifacts
 

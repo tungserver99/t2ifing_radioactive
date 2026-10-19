@@ -81,6 +81,9 @@ def parse_args(argv=None, method="bitmark"):
         p.add_argument("--semantic-shift", type=float, default=.5)
         p.add_argument("--semantic-shift-sweep", type=float, nargs="+")
         p.add_argument("--semantic-t-max", type=int, default=500)
+        p.add_argument("--teacher-precision", choices=["fp16", "bf16", "no"], default="bf16", help="Teacher only; student precision remains --precision")
+        p.add_argument("--teacher-check-steps", type=int, default=32, help="Standalone teacher diagnostic optimizer updates (minimum 4)")
+        p.add_argument("--teacher-check", type=Path, help="Only stress-test latest teacher adapter from an existing run; do not resume training")
         p.add_argument("--teacher-rank", type=int, default=32)
         p.add_argument("--teacher-lr", type=float, default=1e-4)
         p.add_argument("--teacher-train-steps", type=int, default=3000)
@@ -110,7 +113,7 @@ def parse_args(argv=None, method="bitmark"):
         weights = [a.lambda_preserve,a.lambda_code,a.lambda_perp,a.lambda_cycle,
                    a.teacher_clip_drop_max,a.teacher_lpips_max]
         strengths = a.semantic_shift_sweep or [a.semantic_shift]
-        if (min(positive)<1 or a.key_seed<0 or a.carrier_pc_min<0 or a.semantic_t_max<0
+        if (a.teacher_check_steps<4 or min(positive)<1 or a.key_seed<0 or a.carrier_pc_min<0 or a.semantic_t_max<0
                 or a.carrier_pc_max-a.carrier_pc_min+1<a.stable_candidate_count
                 or a.num_bits>a.stable_candidate_count or a.teacher_batch>a.train_n or a.teacher_micro_batch>a.teacher_batch
                 or not 0<=a.teacher_min_tpr<=1 or a.teacher_train_steps<=750
@@ -157,7 +160,7 @@ def parse_args(argv=None, method="bitmark"):
 
 
 def config_from_args(a):
-    ignored = {"output", "resume", "plan_only", "analyze", "min_free_gb"}
+    ignored = {"output", "resume", "plan_only", "analyze", "min_free_gb", "teacher_check", "teacher_check_steps"}
     config = {k: str(v.resolve()) if isinstance(v, Path) else v for k, v in vars(a).items() if k not in ignored}
     return config
 
@@ -269,6 +272,12 @@ def persistent_log(run):
 
 def main(argv=None, method="bitmark"):
     a = parse_args(argv, method)
+    if getattr(a, 'teacher_check', None):
+        if a.resume or a.output or a.analyze or a.plan_only:
+            raise ValueError('--teacher-check is a standalone diagnostic, not resume/plan/analyze')
+        from semantic_teacher_train import check_existing_run
+        check_existing_run(a.teacher_check.resolve(), a.teacher_precision, a.teacher_check_steps)
+        return
     if a.analyze:
         from report import summarize
         summarize(a.analyze.resolve())

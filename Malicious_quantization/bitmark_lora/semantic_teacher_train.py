@@ -65,15 +65,118 @@ def save_adapter(unet, folder, lora_config):
     lora_config.save_pretrained(str(folder))
 
 
+def teacher_precision(config):
+    # Missing key preserves historical run interpretation; new CLI records bf16.
+    return config.get('teacher_precision', config['precision'])
+
+
+def watch_gradient(tensor, label):
+    if tensor.requires_grad:
+        def check(gradient):
+            if not torch.isfinite(gradient).all():
+                raise RuntimeError(f'Nonfinite gradient at {label}')
+            return gradient
+        tensor.register_hook(check)
+    return tensor
+
+
+def checked_teacher_step(named_params, optimizer, scaler, compute, failure_path, context):
+    """Never apply invalid gradients; use FP64 reduction to avoid norm overflow.
+
+    This intentionally fails on nonfinite values (the specification's guard),
+    rather than silently dropping an optimizer update from the fixed budget.
+    """
+    named_params=list(named_params)
+    measured={}
+    optimizer.zero_grad(set_to_none=True)
+    try:
+        measured=compute(lambda loss: scaler.scale(loss).backward() if scaler is not None else loss.backward())
+        if scaler is not None: scaler.unscale_(optimizer)
+        gradients=[p.grad for _,p in named_params if p.grad is not None]
+        bad=[name for name,p in named_params if p.grad is not None and not torch.isfinite(p.grad).all()]
+        if bad: raise RuntimeError(f'Nonfinite parameter gradient: {bad[:8]}')
+        if not gradients: raise RuntimeError('Teacher produced no parameter gradients')
+        # A finite FP32 gradient can still overflow an FP32 sum of squares.
+        norm=torch.stack([g.detach().double().norm(2) for g in gradients]).norm(2)
+        if not torch.isfinite(norm): raise RuntimeError('Nonfinite gradient norm (FP64 reduction)')
+        coefficient=(1. / (norm+1e-6)).clamp(max=1.)
+        with torch.no_grad():
+            for gradient in gradients: gradient.mul_(coefficient.to(device=gradient.device,dtype=gradient.dtype))
+        if scaler is None: optimizer.step()
+        else: scaler.step(optimizer); scaler.update()
+        if any(not torch.isfinite(p).all() for _,p in named_params):
+            raise RuntimeError('Nonfinite teacher parameter after optimizer update')
+        return {**measured,'grad_norm':norm.item()}
+    except Exception as exc:
+        if failure_path is not None:
+            record={**context,'error':str(exc),'losses':measured,
+                    'loss_scale':scaler.get_scale() if scaler is not None else None,
+                    'nonfinite_parameters':[name for name,p in named_params
+                        if p.grad is not None and not torch.isfinite(p.grad).all()]}
+            if named_params and named_params[0][1].is_cuda:
+                record.update(peak_allocated_gib=torch.cuda.max_memory_allocated()/1024**3,
+                              reserved_gib=torch.cuda.memory_reserved()/1024**3)
+            write_json(failure_path,record)
+        raise
+
+
+def stress_teacher(unet,ext,carrier,scheduler,z,text,alpha,config,folder,steps=12):
+    """Short real objective/optimizer probe; restore weights and RNG even on failure."""
+    if steps < 4: raise ValueError('Teacher check needs at least four boundary cases')
+    folder=Path(folder); folder.mkdir(parents=True,exist_ok=True)
+    named=[(n,p) for n,p in unet.named_parameters() if p.requires_grad]
+    if not named: raise RuntimeError('Teacher check has no trainable adapter parameters')
+    saved=[p.detach().cpu().clone() for _,p in named]
+    optimizer=torch.optim.AdamW([p for _,p in named],lr=config['teacher_lr'])
+    precision=teacher_precision(config)
+    scaler=torch.amp.GradScaler('cuda') if precision=='fp16' and z.is_cuda else None
+    devices=[z.device.index if z.device.index is not None else torch.cuda.current_device()] if z.is_cuda else []
+    maximum=min(config['semantic_t_max'],scheduler.config.num_train_timesteps-1)
+    probes=[0,maximum//2,maximum,min(maximum+1,scheduler.config.num_train_timesteps-1)]
+    checks=[]
+    try:
+        with torch.random.fork_rng(devices=devices):
+            rng=torch.Generator('cpu').manual_seed(config['seed']+7919)
+            for index in range(steps):
+                timestep=probes[index] if index<len(probes) else int(torch.randint(0,maximum+1,(1,),generator=rng).item())
+                t=torch.full((len(z),),timestep,device=z.device,dtype=torch.long)
+                noise=torch.randn(z.shape,generator=rng).to(z.device)
+                noisy=scheduler.add_noise(z,noise,t)
+                # Full ramp and cycle enabled on every eligible probe, not warmup.
+                step=((750+config['cycle_every']-1)//config['cycle_every']+index)*config['cycle_every']
+                if z.is_cuda: torch.cuda.reset_peak_memory_stats(z.device)
+                context={'phase':'teacher_check','probe':index+1,'timestep':timestep,
+                         'teacher_precision':precision,'alpha':alpha}
+                values=checked_teacher_step(named,optimizer,scaler,
+                    lambda backward:teacher_backward(unet,ext,carrier,scheduler,noisy,text,t,alpha,config,step,backward,context),
+                    folder/'failure.json',context)
+                row={**context,**values}
+                if z.is_cuda: row['peak_allocated_gib']=torch.cuda.max_memory_allocated(z.device)/1024**3
+                checks.append(row)
+                print(f'Teacher numerical check {index+1}/{steps}: {row}',flush=True)
+        result={'passed':True,'checks':checks,'weights_and_rng_restored':True,
+                'note':'A short probe cannot guarantee future training stability.'}
+        write_json(folder/'check.json',result)
+        return result
+    finally:
+        with torch.no_grad():
+            for (_,parameter),value in zip(named,saved):
+                parameter.copy_(value); parameter.grad=None
+        del optimizer,scaler
+        gc.collect()
+        if z.is_cuda: torch.cuda.empty_cache()
+
+
 def _teacher_microbatch_backward(unet, ext, carrier, scheduler, noisy, text, t,
-                                 alpha, config, step, total_batch, total_semantic, backward):
+                                 alpha, config, step, total_batch, total_semantic, backward, diagnostic=None):
     # The local scope releases every microbatch graph before the next forward.
     with torch.no_grad():
         clean = ext.unet(noisy, t, encoder_hidden_states=text).sample
-    dtype = {'fp16': torch.float16, 'bf16': torch.bfloat16, 'no': torch.float32}[config['precision']]
-    with torch.autocast(noisy.device.type, dtype=dtype, enabled=config['precision'] != 'no'):
+    dtype = {'fp16': torch.float16, 'bf16': torch.bfloat16, 'no': torch.float32}[teacher_precision(config)]
+    with torch.autocast(noisy.device.type, dtype=dtype, enabled=teacher_precision(config) != 'no'):
         predicted = unet(noisy, t, encoder_hidden_states=text).sample
     check_finite(clean, predicted)
+    watch_gradient(predicted, 'teacher prediction')
     preserve = (predicted.float() - clean.float()).square().mean()
     code = perp = cycle = preserve.new_zeros(())
     mask = t <= config['semantic_t_max']
@@ -83,26 +186,29 @@ def _teacher_microbatch_backward(unet, ext, carrier, scheduler, noisy, text, t,
         with torch.no_grad():
             zc = predicted_x0(scheduler, noisy[mask], clean[mask], t[mask])
             fc = ext.encode_latent(zc, text_hidden=text[mask])
-        zp = predicted_x0(scheduler, noisy[mask], predicted[mask], t[mask])
-        fp = ext.encode_latent(zp, text_hidden=text[mask])
+        zp = watch_gradient(predicted_x0(scheduler, noisy[mask], predicted[mask], t[mask]), 'predicted_x0')
+        fp = watch_gradient(ext.encode_latent(zp, text_hidden=text[mask]), 'semantic features')
         code, perp = semantic_losses(fc, fp, carrier, alpha)
         if step % config['cycle_every'] == 0 and config['lambda_cycle'] > 0:
             with torch.no_grad():
                 fcc = ext.encode_latent(ext.cycle(zc), text_hidden=text[mask])
-            fpc = ext.encode_latent(ext.cycle(zp), text_hidden=text[mask])
+            cycle_latent = watch_gradient(ext.cycle(zp), 'VAE cycle output')
+            fpc = watch_gradient(ext.encode_latent(cycle_latent, text_hidden=text[mask]), 'cycle features')
             cycle, _ = semantic_losses(fcc, fpc, carrier, alpha)
     batch_weight = len(noisy) / total_batch
     semantic_weight = selected / total_semantic if total_semantic else 0.
     loss = (config['lambda_preserve'] * preserve * batch_weight + ramp * semantic_weight *
             (config['lambda_code'] * code + config['lambda_perp'] * perp + config['lambda_cycle'] * cycle))
     check_finite(loss)
-    backward(loss)
-    return {'loss': loss.detach().item(), 'preserve': preserve.detach().item() * batch_weight,
+    values={'loss': loss.detach().item(), 'preserve': preserve.detach().item() * batch_weight,
             'code': code.detach().item() * semantic_weight, 'perp': perp.detach().item() * semantic_weight,
             'cycle': cycle.detach().item() * semantic_weight}
+    if diagnostic is not None: diagnostic['microbatch_losses']=values
+    backward(loss)
+    return values
 
 
-def teacher_backward(unet, ext, carrier, scheduler, noisy, text, timesteps, alpha, config, step, backward):
+def teacher_backward(unet, ext, carrier, scheduler, noisy, text, timesteps, alpha, config, step, backward, diagnostic=None):
     """Accumulate the original full-batch objective with bounded forward batches.
 
     Preservation is normalized over all B images; semantic terms over all masked
@@ -117,11 +223,84 @@ def teacher_backward(unet, ext, carrier, scheduler, noisy, text, timesteps, alph
     result = dict.fromkeys(('loss', 'preserve', 'code', 'perp', 'cycle'), 0.)
     for start in range(0, batch, micro):
         end = min(start + micro, batch)
+        if diagnostic is not None:
+            diagnostic.update(microbatch_start=start, microbatch_timesteps=timesteps[start:end].cpu().tolist())
         values = _teacher_microbatch_backward(unet, ext, carrier, scheduler, noisy[start:end], text[start:end],
-                    timesteps[start:end], alpha, config, step, batch, semantic_count, backward)
+                    timesteps[start:end], alpha, config, step, batch, semantic_count, backward, diagnostic)
         for name, value in values.items():
             result[name] += value
     return {**result, 'ramp': fingerprint_ramp(step), 'semantic_fraction': semantic_count / batch}
+
+
+def latest_teacher_adapters(run):
+    found=[]
+    for candidate in sorted((Path(run)/'teacher_fp/candidates').glob('shift_*')):
+        if (candidate/'trained.json').exists():
+            source=candidate
+            for name,digest in read_json(candidate/'trained.json')['files'].items():
+                if sha256(candidate/name)!=digest: raise RuntimeError(f'Teacher artifact changed: {name}')
+        else:
+            checkpoints=[p for p in candidate.glob('checkpoint-*')
+                         if p.name[11:].isdigit() and (p/'adapter_model.safetensors').exists()
+                         and (p/'adapter_config.json').exists()]
+            if not checkpoints: continue
+            source=max(checkpoints,key=lambda p:int(p.name[11:]))
+        found.append((float(candidate.name[len('shift_'):]),source))
+    if not found: raise ValueError('No saved teacher adapter found; a fresh run performs its own early check')
+    return found
+
+
+def check_existing_run(run, precision='bf16', steps=32):
+    """Diagnostic only: reuse old data/checkpoints without accepting changed resume hashes."""
+    import datetime
+    from diffusers import DDPMScheduler
+    from semantic_teacher import extractor,pixels,numerical_policy
+    from student import load_adapter
+    verify_vendor(); numerical_policy()
+    if not torch.cuda.is_available(): raise RuntimeError('Teacher model check requires a GPU')
+    if precision=='bf16' and not torch.cuda.is_bf16_supported():
+        raise RuntimeError('GPU does not support BF16; use --teacher-precision no for an FP32 diagnostic')
+    c=read_json(run/'config.json')
+    if c.get('watermark_method')!='semantic_fp': raise ValueError('Expected a semantic_fp run')
+    c={**c,'teacher_precision':precision}
+    targets=latest_teacher_adapters(run)
+    assets=read_json(run/'assets.json'); rows=read_json(run/'prompts.json')['train']
+    images=run/'images/teacher_clean_train'
+    hashes=read_json(images/'image_hashes.json')
+    if len(hashes)!=len(rows) or any(sha256(images/r['file_name'])!=r['sha256'] for r in hashes):
+        raise RuntimeError('Teacher training image hashes changed')
+    output=run/'diagnostics'/datetime.datetime.now(datetime.timezone.utc).strftime('teacher_check_%Y%m%d_%H%M%S_%f')
+    output.mkdir(parents=True,exist_ok=False)
+    print(f'Teacher diagnostic only; reports: {output}',flush=True)
+    for alpha,source in targets:
+        candidate=source if source.name.startswith('shift_') else source.parent
+        proof=read_json(candidate/'protocol.json')
+        for key,path in (('config_sha256',run/'config.json'),('assets_sha256',run/'assets.json'),
+                         ('carrier_sha256',run/'carrier/complete.json')):
+            if proof[key]!=sha256(path): raise RuntimeError(f'Teacher protocol changed: {key}')
+        ext=extractor(run); unet=copy.deepcopy(ext.unet)
+        load_adapter(unet,source)
+        # Serialized adapters may carry inference_mode; the probe must train LoRA only.
+        for name,parameter in unet.named_parameters(): parameter.requires_grad_('lora_' in name)
+        unet.train(); unet.enable_gradient_checkpointing()
+        carrier=SemanticCarrier.load(run/'carrier','cuda')
+        scheduler=DDPMScheduler.from_pretrained(assets['teacher_clean'],subfolder='scheduler',local_files_only=True)
+        with torch.no_grad():
+            ids=range(c['teacher_batch'])
+            z=ext.image_latent(pixels([images/image_name(i) for i in ids]))
+            text=ext.text([rows[i]['text'] for i in ids])
+        destination=output/candidate.name
+        write_json(destination/'source.json',{'run':str(run),'adapter':str(source),
+            'adapter_sha256':sha256(source/'adapter_model.safetensors'),
+            'adapter_config_sha256':sha256(source/'adapter_config.json'),
+            'source_config_sha256':sha256(run/'config.json'),
+            'effective_config':c,'steps':steps,'optimizer':'fresh AdamW; original optimizer was not saved',
+            'current_code':{name:sha256(Path(__file__).parent/name) for name in
+                ('semantic_teacher_train.py','semantic_carrier.py','semantic_teacher.py')},
+            'diagnostic_only':True})
+        stress_teacher(unet,ext,carrier,scheduler,z,text,alpha,c,destination,steps=steps)
+        del unet,ext,carrier,z,text; gc.collect(); torch.cuda.empty_cache()
+    print(f'Teacher diagnostic PASSED; reports: {output}. This is not an optimizer resume.',flush=True)
 
 
 def train_one(run, alpha, folder):
@@ -134,7 +313,8 @@ def train_one(run, alpha, folder):
               'carrier_sha256':sha256(run/'carrier/complete.json'),'alpha':alpha,
               'restart_policy':'partial candidate restarts from identical clean teacher and seed',
               'training_images_sha256':sha256(run/'images/teacher_clean_train/image_hashes.json'),
-              'micro_batch':c.get('teacher_micro_batch',1), 'reference_cycle_checkpointing':True}
+              'micro_batch':c.get('teacher_micro_batch',1), 'reference_cycle_checkpointing':True,
+              'teacher_precision':teacher_precision(c), 'numerical_check_steps':12}
     folder.mkdir(parents=True,exist_ok=True); freeze(folder/'protocol.json',protocol)
     if (folder/'trained.json').exists():
         old=read_json(folder/'trained.json')
@@ -142,6 +322,8 @@ def train_one(run, alpha, folder):
             if sha256(folder/name)!=digest: raise RuntimeError('Teacher adapter changed')
         return
     torch.manual_seed(c['seed']); torch.cuda.manual_seed_all(c['seed'])
+    if teacher_precision(c)=='bf16' and not torch.cuda.is_bf16_supported():
+        raise RuntimeError('Teacher BF16 requires a supported GPU; choose --teacher-precision no for FP32')
     ext=extractor(run)
     unet=copy.deepcopy(ext.unet).train()
     config=LoraConfig(r=c['teacher_rank'],lora_alpha=c['teacher_rank'],init_lora_weights='gaussian',
@@ -151,7 +333,7 @@ def train_one(run, alpha, folder):
     params=[p for p in unet.parameters() if p.requires_grad]
     if not params: raise ValueError('Teacher has no trainable adapter parameters')
     optimizer=torch.optim.AdamW(params,lr=c['teacher_lr'])
-    scaler=torch.amp.GradScaler('cuda',enabled=c['precision']=='fp16')
+    scaler=torch.amp.GradScaler('cuda') if teacher_precision(c)=='fp16' else None
     scheduler=DDPMScheduler.from_pretrained(assets['teacher_clean'],subfolder='scheduler',local_files_only=True)
     if not 0<=c['semantic_t_max']<scheduler.config.num_train_timesteps:
         raise ValueError('semantic_t_max outside scheduler range')
@@ -160,6 +342,12 @@ def train_one(run, alpha, folder):
     expected=read_json(images/'image_hashes.json')
     if len(expected)!=len(rows) or any(sha256(images/r['file_name'])!=r['sha256'] for r in expected):
         raise RuntimeError('Teacher training image hashes changed')
+    with torch.no_grad():
+        probe_ids=range(c['teacher_batch'])
+        probe_z=ext.image_latent(pixels([images/image_name(i) for i in probe_ids]))
+        probe_text=ext.text([rows[i]['text'] for i in probe_ids])
+    stress_teacher(unet,ext,carrier,scheduler,probe_z,probe_text,alpha,c,folder/'numerical_check')
+    del probe_z,probe_text
     rng=torch.Generator('cpu').manual_seed(c['seed'])
     # Persist image order in the deterministic seed protocol; restart reproduces it.
     order=[]; offset=0
@@ -174,15 +362,14 @@ def train_one(run, alpha, folder):
                 noise=torch.randn(z.shape,generator=rng).to('cuda')
                 t=torch.randint(0,scheduler.config.num_train_timesteps,(len(ids),),generator=rng).to('cuda')
                 noisy=scheduler.add_noise(z,noise,t)
-            optimizer.zero_grad(set_to_none=True)
             torch.cuda.reset_peak_memory_stats()
-            measured=teacher_backward(unet,ext,carrier,scheduler,noisy,text,t,alpha,c,step,
-                                      lambda loss:scaler.scale(loss).backward())
-            scaler.unscale_(optimizer)
-            norm=torch.nn.utils.clip_grad_norm_(params,1.,error_if_nonfinite=True)
-            check_finite(norm)
-            scaler.step(optimizer); scaler.update()
-            raw={'step':step+1,**measured,'grad_norm':float(norm),
+            context={'phase':'train','step':step+1,'alpha':alpha,'image_ids':ids,
+                     'timesteps':t.cpu().tolist(),'teacher_precision':teacher_precision(c)}
+            measured=checked_teacher_step([(n,p) for n,p in unet.named_parameters() if p.requires_grad],
+                optimizer,scaler,
+                lambda backward:teacher_backward(unet,ext,carrier,scheduler,noisy,text,t,alpha,c,step,backward,context),
+                folder/'failure.json',context)
+            raw={'step':step+1,**measured,'teacher_precision':teacher_precision(c),
                  'effective_batch':len(ids),'micro_batch':c.get('teacher_micro_batch',1),
                  'peak_allocated_gib':torch.cuda.max_memory_allocated()/1024**3}
             log.write(json.dumps(raw,allow_nan=False)+'\n'); log.flush()
