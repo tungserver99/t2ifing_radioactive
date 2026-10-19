@@ -306,12 +306,13 @@ def check_existing_run(run, precision='bf16', steps=32):
 def train_one(run, alpha, folder):
     from peft import LoraConfig
     from diffusers import DDPMScheduler
+    from semantic_checkpoint import (latest_full_checkpoint,restore_training_state,save_training_state,advance_sampler,align_loss_log)
     from semantic_teacher import extractor, pixels, numerical_policy
     verify_vendor(); numerical_policy()
     c=read_json(run/'config.json'); assets=read_json(run/'assets.json')
     protocol={'config_sha256':sha256(run/'config.json'),'assets_sha256':sha256(run/'assets.json'),
               'carrier_sha256':sha256(run/'carrier/complete.json'),'alpha':alpha,
-              'restart_policy':'partial candidate restarts from identical clean teacher and seed',
+              'restart_policy':'restore full checkpoint; explicit legacy continuation uses fresh optimizer',
               'training_images_sha256':sha256(run/'images/teacher_clean_train/image_hashes.json'),
               'micro_batch':c.get('teacher_micro_batch',1), 'reference_cycle_checkpointing':True,
               'teacher_precision':teacher_precision(c), 'numerical_check_steps':12}
@@ -328,7 +329,19 @@ def train_one(run, alpha, folder):
     unet=copy.deepcopy(ext.unet).train()
     config=LoraConfig(r=c['teacher_rank'],lora_alpha=c['teacher_rank'],init_lora_weights='gaussian',
                       target_modules=adapter_targets(unet))
-    unet.add_adapter(config)
+    full_checkpoint=latest_full_checkpoint(folder)
+    initial=(c.get('continuation',{}).get('checkpoints',{}).get(candidate_tag(alpha))
+             if full_checkpoint is None else None)
+    if initial:
+        from student import load_adapter
+        source=Path(initial['path'])
+        if (sha256(source/'adapter_model.safetensors')!=initial['adapter_sha256'] or
+                sha256(source/'adapter_config.json')!=initial['adapter_config_sha256']):
+            raise RuntimeError('Continuation adapter changed')
+        config=LoraConfig.from_pretrained(str(source)); load_adapter(unet,source)
+        for name,parameter in unet.named_parameters():parameter.requires_grad_('lora_' in name)
+    else:
+        unet.add_adapter(config)
     unet.enable_gradient_checkpointing()
     params=[p for p in unet.parameters() if p.requires_grad]
     if not params: raise ValueError('Teacher has no trainable adapter parameters')
@@ -342,17 +355,31 @@ def train_one(run, alpha, folder):
     expected=read_json(images/'image_hashes.json')
     if len(expected)!=len(rows) or any(sha256(images/r['file_name'])!=r['sha256'] for r in expected):
         raise RuntimeError('Teacher training image hashes changed')
+    rng=torch.Generator('cpu').manual_seed(c['seed'])
+    start_step=0;order=[];offset=0
+    if full_checkpoint:
+        state=restore_training_state(full_checkpoint,unet,optimizer,scaler,rng,protocol)
+        start_step,order,offset=state['step'],state['order'],state['offset']
+        align_loss_log(folder/'losses.jsonl',start_step,expected_hash=state['loss_prefix_sha256'])
+        print(f'Resuming teacher exact state at completed step {start_step}',flush=True)
+    elif initial:
+        start_step=initial['step']
+        if sha256(initial['loss_log'])!=initial['loss_log_sha256']:raise RuntimeError('Source teacher loss log changed')
+        align_loss_log(folder/'losses.jsonl',start_step,initial['loss_log'])
+        order,offset=advance_sampler(rng,len(rows),c['teacher_batch'],(c['teacher_batch'],4,64,64),
+                                    scheduler.config.num_train_timesteps,start_step)
+        print(f'Continuing teacher weights at step {start_step}; optimizer reset (legacy checkpoint)',flush=True)
+    else:
+        align_loss_log(folder/'losses.jsonl',0)
+    if not 0<=start_step<=c['teacher_train_steps']:raise ValueError('Checkpoint step outside teacher budget')
     with torch.no_grad():
         probe_ids=range(c['teacher_batch'])
         probe_z=ext.image_latent(pixels([images/image_name(i) for i in probe_ids]))
         probe_text=ext.text([rows[i]['text'] for i in probe_ids])
     stress_teacher(unet,ext,carrier,scheduler,probe_z,probe_text,alpha,c,folder/'numerical_check')
     del probe_z,probe_text
-    rng=torch.Generator('cpu').manual_seed(c['seed'])
-    # Persist image order in the deterministic seed protocol; restart reproduces it.
-    order=[]; offset=0
-    with (folder/'losses.jsonl').open('w') as log:
-        for step in range(c['teacher_train_steps']):
+    with (folder/'losses.jsonl').open('a') as log:
+        for step in range(start_step,c['teacher_train_steps']):
             if offset+c['teacher_batch']>len(order):
                 order=torch.randperm(len(rows),generator=rng).tolist(); offset=0
             ids=order[offset:offset+c['teacher_batch']]; offset+=len(ids)
@@ -374,8 +401,10 @@ def train_one(run, alpha, folder):
                  'peak_allocated_gib':torch.cuda.max_memory_allocated()/1024**3}
             log.write(json.dumps(raw,allow_nan=False)+'\n'); log.flush()
             if (step+1)%25==0: print(f'Teacher alpha={alpha}: {raw}',flush=True)
-            if (step+1)%c['teacher_checkpoint_every']==0:
-                save_adapter(unet,folder/f'checkpoint-{step+1}',config)
+            if (step+1)%c['teacher_checkpoint_every']==0 or step+1==c['teacher_train_steps']:
+                checkpoint=folder/f'checkpoint-{step+1}'
+                save_adapter(unet,checkpoint,config)
+                save_training_state(checkpoint,unet,optimizer,scaler,rng,order,offset,step+1,protocol)
     save_adapter(unet,folder,config)
     freeze(folder/'trained.json',{'files':{name:sha256(folder/name) for name in
         ('adapter_model.safetensors','adapter_config.json','losses.jsonl')},'steps':c['teacher_train_steps']})

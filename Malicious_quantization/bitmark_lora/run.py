@@ -81,13 +81,14 @@ def parse_args(argv=None, method="bitmark"):
         p.add_argument("--semantic-shift", type=float, default=.5)
         p.add_argument("--semantic-shift-sweep", type=float, nargs="+")
         p.add_argument("--semantic-t-max", type=int, default=500)
+        p.add_argument("--continue-from", type=Path, help="Fork a run using prepared data and saved teacher weights; fresh optimizer, original step schedule")
         p.add_argument("--teacher-precision", choices=["fp16", "bf16", "no"], default="bf16", help="Teacher only; student precision remains --precision")
         p.add_argument("--teacher-check-steps", type=int, default=32, help="Standalone teacher diagnostic optimizer updates (minimum 4)")
         p.add_argument("--teacher-check", type=Path, help="Only stress-test latest teacher adapter from an existing run; do not resume training")
         p.add_argument("--teacher-rank", type=int, default=32)
         p.add_argument("--teacher-lr", type=float, default=1e-4)
         p.add_argument("--teacher-train-steps", type=int, default=3000)
-        p.add_argument("--teacher-checkpoint-every", type=int, default=500)
+        p.add_argument("--teacher-checkpoint-every", type=int, default=100)
         p.add_argument("--teacher-micro-batch", type=int, default=1, help="Teacher forward batch; gradients accumulate to --teacher-batch")
         p.add_argument("--teacher-batch", type=int, default=4)
         p.add_argument("--score-batch", type=int, default=4)
@@ -160,7 +161,7 @@ def parse_args(argv=None, method="bitmark"):
 
 
 def config_from_args(a):
-    ignored = {"output", "resume", "plan_only", "analyze", "min_free_gb", "teacher_check", "teacher_check_steps"}
+    ignored = {"output", "resume", "plan_only", "analyze", "min_free_gb", "teacher_check", "teacher_check_steps", "continue_from"}
     config = {k: str(v.resolve()) if isinstance(v, Path) else v for k, v in vars(a).items() if k not in ignored}
     return config
 
@@ -273,7 +274,7 @@ def persistent_log(run):
 def main(argv=None, method="bitmark"):
     a = parse_args(argv, method)
     if getattr(a, 'teacher_check', None):
-        if a.resume or a.output or a.analyze or a.plan_only:
+        if a.resume or a.output or a.analyze or a.plan_only or a.continue_from:
             raise ValueError('--teacher-check is a standalone diagnostic, not resume/plan/analyze')
         from semantic_teacher_train import check_existing_run
         check_existing_run(a.teacher_check.resolve(), a.teacher_precision, a.teacher_check_steps)
@@ -284,6 +285,15 @@ def main(argv=None, method="bitmark"):
         return
     verify_vendor()
     c = config_from_args(a)
+    if getattr(a,'continue_from',None):
+        if a.resume or a.analyze:raise ValueError('--continue-from creates a new run; cannot accompany resume/analyze')
+        supplied=argv if argv is not None else sys.argv[1:]
+        allowed={'--continue-from','--teacher-precision','--output','--min-free-gb','--plan-only'}
+        if any(x.split('=')[0] not in allowed for x in supplied if x.startswith('--')):
+            raise ValueError('--continue-from preserves the source experiment; only teacher precision/output/disk/plan overrides are allowed')
+        from semantic_checkpoint import continuation_config
+        c=continuation_config(a.continue_from,a.teacher_precision)
+        a.cache=Path(c['cache'])
     if a.resume:
         # Reject hidden overrides rather than silently ignoring user arguments.
         supplied = argv if argv is not None else sys.argv[1:]
@@ -335,6 +345,9 @@ def main(argv=None, method="bitmark"):
         print(f"Persistent run: {run}", flush=True)
         hardware = preflight(a)
         freeze(run / "config.json", c)
+        if c.get('continuation') and not (run/'continuation.json').exists():
+            from semantic_checkpoint import prepare_continuation
+            prepare_continuation(run,c)
         source_files = {str(p.relative_to(HERE)): sha256(p) for p in HERE.glob("*.py")}
         source_files["vendor/provenance.json"] = sha256(HERE / "vendor/provenance.json")
         source_files["requirements.txt"] = sha256(HERE / "requirements.txt")
@@ -358,10 +371,14 @@ def main(argv=None, method="bitmark"):
             stage(run, label, [py, str(HERE / file), "--run", str(run), *args])
         call(assets_file, "01_assets")
         if carrier == "semantic_fp":
-            call(teacher_file, "01a_clean_teacher", "--stage", "clean")
-            call(teacher_file, "01b_carrier", "--stage", "carrier")
-            call(teacher_file, "01c_clean_calibration", "--stage", "score", "--directories", "teacher_clean_calibration")
-            call("semantic_report.py", "01d_teacher_null", "--teacher-null-only")
+            if not c.get('continuation'):
+                call(teacher_file, "01a_clean_teacher", "--stage", "clean")
+                call(teacher_file, "01b_carrier", "--stage", "carrier")
+                call(teacher_file, "01c_clean_calibration", "--stage", "score", "--directories", "teacher_clean_calibration")
+                call("semantic_report.py", "01d_teacher_null", "--teacher-null-only")
+            else:
+                from semantic_report import freeze_null
+                freeze_null(run,'teacher')
             call(teacher_file, "01e_train_native_teacher", "--stage", "train")
         call(teacher_file, "02_teacher", "--stage", "generate")
         call(teacher_file, "03_teacher_scores", "--stage", "score", "--directories",

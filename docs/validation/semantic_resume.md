@@ -1,0 +1,15 @@
+# Teacher checkpoint recovery and legacy continuation
+
+Previous code saved teacher adapters every 500 steps, including step 1000 before the reported failure, but not optimizer/scaler/RNG state. It could not perform an exact optimization resume. That missing state cannot be recovered retroactively.
+
+New teacher checkpoints default to every 100 completed steps and at the final step. They persist trainable parameters, adapter files, AdamW state, optional FP16 scaler state, completed step, data-generator state, order/offset, PyTorch CPU/CUDA RNG and Python RNG. A manifest containing hashes is written last. Incomplete checkpoints are ignored; changed complete checkpoints fail. The fixed teacher LR does not use a stateful LR scheduler. Strict code/config/environment provenance remains in force for --resume.
+
+Interrupted new runs restore the latest complete checkpoint and continue from completed_step+1 through the original final step. Loss records after the checkpoint are archived, the saved prefix hash is checked and append resumes without duplicate steps. The early readiness probe restores parameters/RNG and has a separate optimizer, so it does not consume training steps or change restored optimizer moments.
+
+For an old run after code/precision changes, --continue-from OLD_RUN creates a separate experiment with source hashes/lineage. Verified preparation assets (prompts, clean images, carrier/key/PCA, calibration scores and threshold) are reused using hard links with copy fallback; source artifacts are not overwritten. Existing source models are reverified. The latest numbered adapter weights are loaded, its completed step is retained, and the data-generator position is reconstructed by replaying the deterministic CPU permutation/noise/timestep draws. The original budget/ramp and scientific settings remain in effect, with teacher precision BF16 and checkpoint interval at most 100. AdamW starts fresh because old checkpoints lack its moments. This is explicitly a warm start with a changed optimizer/precision history, not an exact resume or equivalent fresh baseline. A step-1000 checkpoint normally continues with step 1001 up to step 3000 after readiness checks.
+
+## CPU evidence
+
+Six recovery tests cover exact interrupted/uninterrupted model and AdamW state equality on a small model; deterministic reconstruction of the legacy sampler RNG; preserving original prep files while building a continued run with the same carrier/threshold; ignoring incomplete state and rejecting changed identities/artifacts; archiving/aligning loss logs; and rejecting tampered loss prefixes. No real model or GPU execution was performed.
+
+The full harness baseline continues to contain four unrelated failures/errors: test_bootstrap (Windows lacks fcntl), test_recovery.test_recover_and_reject_incomplete_or_changed_weights (same), test_serum.test_reject_bad_artifacts_and_zip_traversal, and test_validation.test_drive_results_local_environment (POSIX path expectation). Actual GPU recovery remains unmeasured; CPU equivalence does not promise bitwise equality across different GPU/software environments.
