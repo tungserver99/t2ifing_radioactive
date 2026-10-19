@@ -85,6 +85,7 @@ def parse_args(argv=None, method="bitmark"):
         p.add_argument("--teacher-lr", type=float, default=1e-4)
         p.add_argument("--teacher-train-steps", type=int, default=3000)
         p.add_argument("--teacher-checkpoint-every", type=int, default=500)
+        p.add_argument("--teacher-micro-batch", type=int, default=1, help="Teacher forward batch; gradients accumulate to --teacher-batch")
         p.add_argument("--teacher-batch", type=int, default=4)
         p.add_argument("--score-batch", type=int, default=4)
         p.add_argument("--cycle-every", type=int, default=4)
@@ -104,14 +105,14 @@ def parse_args(argv=None, method="bitmark"):
             if "--ranks" not in flags: a.ranks = [32]
             if "--adapter-scopes" not in flags: a.adapter_scopes = ["attention_conv"]
             if not flags & {"--dora", "--no-dora"}: a.dora = False
-        positive = [a.teacher_batch,a.score_batch,a.num_bits,a.stable_candidate_count,a.teacher_rank,
+        positive = [a.teacher_batch,a.teacher_micro_batch,a.score_batch,a.num_bits,a.stable_candidate_count,a.teacher_rank,
                     a.teacher_train_steps,a.teacher_checkpoint_every,a.cycle_every]
         weights = [a.lambda_preserve,a.lambda_code,a.lambda_perp,a.lambda_cycle,
                    a.teacher_clip_drop_max,a.teacher_lpips_max]
         strengths = a.semantic_shift_sweep or [a.semantic_shift]
         if (min(positive)<1 or a.key_seed<0 or a.carrier_pc_min<0 or a.semantic_t_max<0
                 or a.carrier_pc_max-a.carrier_pc_min+1<a.stable_candidate_count
-                or a.num_bits>a.stable_candidate_count or a.teacher_batch>a.train_n
+                or a.num_bits>a.stable_candidate_count or a.teacher_batch>a.train_n or a.teacher_micro_batch>a.teacher_batch
                 or not 0<=a.teacher_min_tpr<=1 or a.teacher_train_steps<=750
                 or any(not math.isfinite(x) or x<0 for x in weights)
                 or any(not math.isfinite(x) or x<=0 for x in strengths+[a.teacher_lr,a.full_learning_rate])
@@ -229,7 +230,7 @@ def preflight(a):
             raise RuntimeError("CUDA matrix smoke check returned nonfinite values")
     torch.cuda.synchronize()
     print(f"GPU: {torch.cuda.get_device_name()}; torch={torch.__version__}", flush=True)
-    for path in [a.cache, (a.output or results_root())]:
+    for path in [a.cache, (a.output or results_root(getattr(a, "watermark_method", None)))]:
         probe = path.resolve()
         while not probe.exists():
             probe = probe.parent
@@ -296,7 +297,7 @@ def main(argv=None, method="bitmark"):
                        "ordinary student train", "MSE selection", "test", "semantic scores and utility"],
             "student_selection": "minimum held-out denoising MSE; earlier step wins ties",
             "generation": "ordinary Gaussian generators; no key, custom latents or postprocessor",
-            "execute": "bash run_semantic_fp.sh", "gpu_work": False}, indent=2))
+            "execute": "bash run_semantic_fp.sh", "gpu_work": False, "results_root": str(results_root(carrier))}, indent=2))
         return
     if a.plan_only:
         print(json.dumps({"config": c, "students": branches(c),
@@ -313,7 +314,7 @@ def main(argv=None, method="bitmark"):
     if a.resume:
         run = a.resume.resolve()
     else:
-        run = a.output.resolve() if a.output else results_root() / datetime.datetime.now(ZoneInfo("Australia/Sydney")).strftime(f"run_{carrier}_%Y%m%d_%H%M%S_%f")
+        run = a.output.resolve() if a.output else results_root(carrier) / datetime.datetime.now(ZoneInfo("Australia/Sydney")).strftime(f"run_{carrier}_%Y%m%d_%H%M%S_%f")
         run.mkdir(parents=True, exist_ok=False)
     # Drive FUSE may not support flock; synchronize same-host launches on local storage.
     import hashlib

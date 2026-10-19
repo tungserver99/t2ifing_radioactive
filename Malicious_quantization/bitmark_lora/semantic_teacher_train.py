@@ -65,6 +65,65 @@ def save_adapter(unet, folder, lora_config):
     lora_config.save_pretrained(str(folder))
 
 
+def _teacher_microbatch_backward(unet, ext, carrier, scheduler, noisy, text, t,
+                                 alpha, config, step, total_batch, total_semantic, backward):
+    # The local scope releases every microbatch graph before the next forward.
+    with torch.no_grad():
+        clean = ext.unet(noisy, t, encoder_hidden_states=text).sample
+    dtype = {'fp16': torch.float16, 'bf16': torch.bfloat16, 'no': torch.float32}[config['precision']]
+    with torch.autocast(noisy.device.type, dtype=dtype, enabled=config['precision'] != 'no'):
+        predicted = unet(noisy, t, encoder_hidden_states=text).sample
+    check_finite(clean, predicted)
+    preserve = (predicted.float() - clean.float()).square().mean()
+    code = perp = cycle = preserve.new_zeros(())
+    mask = t <= config['semantic_t_max']
+    selected = int(mask.sum().item())
+    ramp = fingerprint_ramp(step)
+    if selected and ramp > 0:
+        with torch.no_grad():
+            zc = predicted_x0(scheduler, noisy[mask], clean[mask], t[mask])
+            fc = ext.encode_latent(zc, text_hidden=text[mask])
+        zp = predicted_x0(scheduler, noisy[mask], predicted[mask], t[mask])
+        fp = ext.encode_latent(zp, text_hidden=text[mask])
+        code, perp = semantic_losses(fc, fp, carrier, alpha)
+        if step % config['cycle_every'] == 0 and config['lambda_cycle'] > 0:
+            with torch.no_grad():
+                fcc = ext.encode_latent(ext.cycle(zc), text_hidden=text[mask])
+            fpc = ext.encode_latent(ext.cycle(zp), text_hidden=text[mask])
+            cycle, _ = semantic_losses(fcc, fpc, carrier, alpha)
+    batch_weight = len(noisy) / total_batch
+    semantic_weight = selected / total_semantic if total_semantic else 0.
+    loss = (config['lambda_preserve'] * preserve * batch_weight + ramp * semantic_weight *
+            (config['lambda_code'] * code + config['lambda_perp'] * perp + config['lambda_cycle'] * cycle))
+    check_finite(loss)
+    backward(loss)
+    return {'loss': loss.detach().item(), 'preserve': preserve.detach().item() * batch_weight,
+            'code': code.detach().item() * semantic_weight, 'perp': perp.detach().item() * semantic_weight,
+            'cycle': cycle.detach().item() * semantic_weight}
+
+
+def teacher_backward(unet, ext, carrier, scheduler, noisy, text, timesteps, alpha, config, step, backward):
+    """Accumulate the original full-batch objective with bounded forward batches.
+
+    Preservation is normalized over all B images; semantic terms over all masked
+    images in the effective batch, not separately over each microbatch. The caller
+    performs exactly one unscale/clip/optimizer update after this function.
+    """
+    batch = len(noisy)
+    micro = config.get('teacher_micro_batch', 1)
+    if batch < 1 or micro < 1:
+        raise ValueError('Teacher batch and microbatch must be positive')
+    semantic_count = int((timesteps <= config['semantic_t_max']).sum().item())
+    result = dict.fromkeys(('loss', 'preserve', 'code', 'perp', 'cycle'), 0.)
+    for start in range(0, batch, micro):
+        end = min(start + micro, batch)
+        values = _teacher_microbatch_backward(unet, ext, carrier, scheduler, noisy[start:end], text[start:end],
+                    timesteps[start:end], alpha, config, step, batch, semantic_count, backward)
+        for name, value in values.items():
+            result[name] += value
+    return {**result, 'ramp': fingerprint_ramp(step), 'semantic_fraction': semantic_count / batch}
+
+
 def train_one(run, alpha, folder):
     from peft import LoraConfig
     from diffusers import DDPMScheduler
@@ -74,7 +133,8 @@ def train_one(run, alpha, folder):
     protocol={'config_sha256':sha256(run/'config.json'),'assets_sha256':sha256(run/'assets.json'),
               'carrier_sha256':sha256(run/'carrier/complete.json'),'alpha':alpha,
               'restart_policy':'partial candidate restarts from identical clean teacher and seed',
-              'training_images_sha256':sha256(run/'images/teacher_clean_train/image_hashes.json')}
+              'training_images_sha256':sha256(run/'images/teacher_clean_train/image_hashes.json'),
+              'micro_batch':c.get('teacher_micro_batch',1), 'reference_cycle_checkpointing':True}
     folder.mkdir(parents=True,exist_ok=True); freeze(folder/'protocol.json',protocol)
     if (folder/'trained.json').exists():
         old=read_json(folder/'trained.json')
@@ -91,7 +151,6 @@ def train_one(run, alpha, folder):
     params=[p for p in unet.parameters() if p.requires_grad]
     if not params: raise ValueError('Teacher has no trainable adapter parameters')
     optimizer=torch.optim.AdamW(params,lr=c['teacher_lr'])
-    dtype={'fp16':torch.float16,'bf16':torch.bfloat16,'no':torch.float32}[c['precision']]
     scaler=torch.amp.GradScaler('cuda',enabled=c['precision']=='fp16')
     scheduler=DDPMScheduler.from_pretrained(assets['teacher_clean'],subfolder='scheduler',local_files_only=True)
     if not 0<=c['semantic_t_max']<scheduler.config.num_train_timesteps:
@@ -115,34 +174,17 @@ def train_one(run, alpha, folder):
                 noise=torch.randn(z.shape,generator=rng).to('cuda')
                 t=torch.randint(0,scheduler.config.num_train_timesteps,(len(ids),),generator=rng).to('cuda')
                 noisy=scheduler.add_noise(z,noise,t)
-                clean=ext.unet(noisy,t,encoder_hidden_states=text).sample
             optimizer.zero_grad(set_to_none=True)
-            with torch.autocast('cuda',dtype=dtype,enabled=c['precision']!='no'):
-                predicted=unet(noisy,t,encoder_hidden_states=text).sample
-            check_finite(clean,predicted)
-            preserve=(predicted.float()-clean.float()).square().mean()
-            code=perp=cycle=preserve.new_zeros(())
-            mask=t<=c['semantic_t_max']; ramp=fingerprint_ramp(step)
-            if mask.any() and ramp>0:
-                with torch.no_grad():
-                    zc=predicted_x0(scheduler,noisy[mask],clean[mask],t[mask])
-                    fc=ext.encode_latent(zc,text_hidden=text[mask])
-                zp=predicted_x0(scheduler,noisy[mask],predicted[mask],t[mask])
-                fp=ext.encode_latent(zp,text_hidden=text[mask])
-                code,perp=semantic_losses(fc,fp,carrier,alpha)
-                if step%c['cycle_every']==0 and c['lambda_cycle']>0:
-                    with torch.no_grad(): fcc=ext.encode_latent(ext.cycle(zc),text_hidden=text[mask])
-                    fpc=ext.encode_latent(ext.cycle(zp),text_hidden=text[mask])
-                    cycle,_=semantic_losses(fcc,fpc,carrier,alpha)
-            loss=c['lambda_preserve']*preserve+ramp*(c['lambda_code']*code+c['lambda_perp']*perp+c['lambda_cycle']*cycle)
-            check_finite(loss)
-            scaler.scale(loss).backward(); scaler.unscale_(optimizer)
+            torch.cuda.reset_peak_memory_stats()
+            measured=teacher_backward(unet,ext,carrier,scheduler,noisy,text,t,alpha,c,step,
+                                      lambda loss:scaler.scale(loss).backward())
+            scaler.unscale_(optimizer)
             norm=torch.nn.utils.clip_grad_norm_(params,1.,error_if_nonfinite=True)
             check_finite(norm)
             scaler.step(optimizer); scaler.update()
-            raw={'step':step+1,'loss':loss.item(),'preserve':preserve.item(),'code':code.item(),
-                 'perp':perp.item(),'cycle':cycle.item(),'ramp':ramp,
-                 'semantic_fraction':mask.float().mean().item(),'grad_norm':float(norm)}
+            raw={'step':step+1,**measured,'grad_norm':float(norm),
+                 'effective_batch':len(ids),'micro_batch':c.get('teacher_micro_batch',1),
+                 'peak_allocated_gib':torch.cuda.max_memory_allocated()/1024**3}
             log.write(json.dumps(raw,allow_nan=False)+'\n'); log.flush()
             if (step+1)%25==0: print(f'Teacher alpha={alpha}: {raw}',flush=True)
             if (step+1)%c['teacher_checkpoint_every']==0:

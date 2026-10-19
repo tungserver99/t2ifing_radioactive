@@ -87,11 +87,12 @@ class SemanticCarrier:
 
 class SemanticExtractor:
     """Frozen parameters still allow gradients with respect to latent/image inputs."""
-    def __init__(self, pipe, device='cuda'):
+    def __init__(self, pipe, device='cuda', gradient_checkpointing=True):
         self.vae, self.unet = pipe.vae, pipe.unet
         self.tokenizer, self.text_encoder = pipe.tokenizer, pipe.text_encoder
         self.device = device
         self.feature_dim = None
+        self.gradient_checkpointing = gradient_checkpointing
         for model in (self.vae, self.unet, self.text_encoder):
             model.eval().requires_grad_(False).to(device=device, dtype=torch.float32)
 
@@ -112,6 +113,12 @@ class SemanticExtractor:
     def encode_latent(self, scaled_latents, prompts=None, text_hidden=None):
         check_finite(scaled_latents)
         hidden = self.text(prompts) if text_hidden is None else text_hidden
+        if self.gradient_checkpointing and torch.is_grad_enabled() and scaled_latents.requires_grad:
+            from torch.utils.checkpoint import checkpoint
+            return checkpoint(self._latent_features, scaled_latents, hidden, use_reentrant=False)
+        return self._latent_features(scaled_latents, hidden)
+
+    def _latent_features(self, scaled_latents, hidden):
         captured = []
         handle = self.unet.mid_block.register_forward_hook(lambda module, args, output: captured.append(output))
         try:
@@ -128,6 +135,12 @@ class SemanticExtractor:
         return features
 
     def cycle(self, scaled_latents):
+        if self.gradient_checkpointing and torch.is_grad_enabled() and scaled_latents.requires_grad:
+            from torch.utils.checkpoint import checkpoint
+            return checkpoint(self._cycle, scaled_latents, use_reentrant=False)
+        return self._cycle(scaled_latents)
+
+    def _cycle(self, scaled_latents):
         image = self.vae.decode(scaled_latents.float() / self.vae.config.scaling_factor).sample
         check_finite(image)
         # Same clipping as normal image conversion, without quantization (differentiable).

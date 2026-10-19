@@ -24,9 +24,10 @@ def runtime_root():
                               '/content/bitmark_runtime' if is_colab() else str(HERE))).expanduser().resolve()
 
 
-def results_root():
+def results_root(method=None):
     """Persist runs beside the repository's launchers (including mounted Drive)."""
-    return Path(os.environ.get('BITMARK_RESULTS_ROOT', str(HERE.parent))).expanduser().resolve()
+    default = HERE.parent.parent if method == 'semantic_fp' else HERE.parent
+    return Path(os.environ.get('BITMARK_RESULTS_ROOT', str(default))).expanduser().resolve()
 
 
 def require_local_runtime_path(path):
