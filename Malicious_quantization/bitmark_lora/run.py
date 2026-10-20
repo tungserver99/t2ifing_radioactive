@@ -54,6 +54,7 @@ def parse_args(argv=None, method="bitmark"):
     p.add_argument("--cache", type=Path, default=runtime_root() / "cache")
     p.add_argument("--output", type=Path, help="Create a NEW run directory here")
     p.add_argument("--resume", type=Path, help="Resume exact recorded config from an existing run; do not supply experiment overrides")
+    p.add_argument("--upgrade-execution", action="store_true", help="With --resume only: audited equivalent mid-block feature optimization from fddd62e")
     p.add_argument("--min-free-gb", type=float, default=70)
     p.add_argument("--plan-only", action="store_true", help="Print protocol only; default without this flag executes the experiment")
     p.add_argument("--analyze", type=Path, help="Recompute reports from an existing complete run; no GPU required")
@@ -156,6 +157,8 @@ def parse_args(argv=None, method="bitmark"):
         p.error("Require 2 <= validation-generation-n <= validation-n")
     if len(set(a.adapter_scopes)) != len(a.adapter_scopes):
         p.error("Adapter scopes must be unique")
+    if a.upgrade_execution and (not a.resume or method != 'semantic_fp'):
+        p.error('--upgrade-execution requires --resume for semantic_fp')
     if a.resume and a.output:
         p.error("--resume and --output are mutually exclusive")
     numeric = [a.train_n, a.calibration_n, a.test_n, a.max_train_steps, a.validation_n, a.validation_draws, a.batch_size,
@@ -173,7 +176,7 @@ def parse_args(argv=None, method="bitmark"):
 
 
 def config_from_args(a):
-    ignored = {"output", "resume", "plan_only", "analyze", "min_free_gb", "teacher_check", "teacher_check_steps", "continue_from", "reuse_preparation"}
+    ignored = {"output", "resume", "plan_only", "analyze", "min_free_gb", "teacher_check", "teacher_check_steps", "continue_from", "reuse_preparation", "upgrade_execution"}
     config = {k: str(v.resolve()) if isinstance(v, Path) else v for k, v in vars(a).items() if k not in ignored}
     if config.get('teacher_objective')=='threshold_cfg_v1':
         for name in ('semantic_shift','semantic_shift_sweep','lambda_preserve','lambda_code','lambda_perp','lambda_cycle'):
@@ -324,9 +327,9 @@ def main(argv=None, method="bitmark"):
     if a.resume:
         # Reject hidden overrides rather than silently ignoring user arguments.
         supplied = argv if argv is not None else sys.argv[1:]
-        allowed = {"--resume", "--min-free-gb", "--plan-only"}
+        allowed = {"--resume", "--min-free-gb", "--plan-only", "--upgrade-execution"}
         if any(x.split("=")[0] not in allowed for x in supplied if x.startswith("--")):
-            raise ValueError("--resume loads the frozen config; only --min-free-gb/--plan-only may accompany it")
+            raise ValueError("--resume loads the frozen config; only --min-free-gb/--plan-only/--upgrade-execution may accompany it")
         c = read_json(a.resume.resolve() / "config.json")
         a.watermark_method = c.get("watermark_method", "bitmark")
         a.cache = Path(c["cache"])
@@ -387,6 +390,9 @@ def main(argv=None, method="bitmark"):
             for name in ("main.py", "run_semantic_fp.sh", "native_semantic_radioactive_fingerprint_codex_spec.md", "docs/threshold_cfg_v1.md"):
                 source_files["../../" + name] = sha256(project_root / name)
             source_files["requirements-semantic.txt"] = sha256(HERE / "requirements-semantic.txt")
+        if a.upgrade_execution:
+            from semantic_execution import upgrade_execution_manifest
+            upgrade_execution_manifest(run, source_files)
         freeze(run / "code_manifest.json", source_files)
         versions = {p: importlib.metadata.version(p) for p in (
             "torch", "torchvision", "diffusers", "transformers", "peft", "accelerate",

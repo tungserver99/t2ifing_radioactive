@@ -1,4 +1,4 @@
-﻿"""Fixed clean SD2.1 semantic coordinates; no learned detector."""
+"""Fixed clean SD2.1 semantic coordinates; no learned detector."""
 import contextlib
 import random
 from pathlib import Path
@@ -85,6 +85,10 @@ class SemanticCarrier:
                    torch.tensor(key['signs']), selected).to(device)
 
 
+class _MidBlockReady(Exception):
+    """Private control flow: features are ready; skip the unused UNet decoder."""
+
+
 class SemanticExtractor:
     """Frozen parameters still allow gradients with respect to latent/image inputs."""
     def __init__(self, pipe, device='cuda', gradient_checkpointing=True):
@@ -120,10 +124,18 @@ class SemanticExtractor:
 
     def _latent_features(self, scaled_latents, hidden):
         captured = []
-        handle = self.unet.mid_block.register_forward_hook(lambda module, args, output: captured.append(output))
+        def capture(module, args, output):
+            captured.append(output)
+            # These exact mid-block activations are the entire feature definition.
+            # Do not run up-blocks or output layers whose results are discarded.
+            raise _MidBlockReady()
+        handle = self.unet.mid_block.register_forward_hook(capture)
         try:
-            self.unet(scaled_latents.float(), torch.zeros(len(scaled_latents), device=self.device, dtype=torch.long),
-                      encoder_hidden_states=hidden.float())
+            try:
+                self.unet(scaled_latents.float(), torch.zeros(len(scaled_latents), device=self.device, dtype=torch.long),
+                          encoder_hidden_states=hidden.float())
+            except _MidBlockReady:
+                pass
         finally:
             handle.remove()
         if len(captured) != 1 or captured[0].ndim != 4:
