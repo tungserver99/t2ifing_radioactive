@@ -194,11 +194,16 @@ def generate(run):
 
 if __name__ == '__main__':
     p=argparse.ArgumentParser(); p.add_argument('--run',type=Path,required=True)
-    p.add_argument('--stage',choices=['clean','carrier','train','generate','score'],required=True)
+    p.add_argument('--stage',choices=['clean','carrier','train','candidate','generate','score'],required=True)
+    p.add_argument('--kappa',type=float)
     p.add_argument('--directories',nargs='+'); a=p.parse_args(); run=a.run.resolve()
     if a.stage=='score':
         if not a.directories: p.error('--directories is required')
         score(run,a.directories)
+    elif a.stage=='candidate':
+        if a.kappa is None:p.error('--kappa is required for candidate stage')
+        from semantic_teacher_train import train_threshold_candidate
+        train_threshold_candidate(run,a.kappa)
     elif a.stage=='clean': clean_prepare(run)
     elif a.stage=='carrier': carrier_stage(run)
     elif a.stage=='generate': generate(run)

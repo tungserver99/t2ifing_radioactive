@@ -5,6 +5,7 @@ from pathlib import Path
 import torch
 from common import finite, freeze, image_name, read_json, sha256, write_json
 from semantic_carrier import SemanticCarrier, check_finite
+from semantic_threshold import quality_passes,is_threshold,clip_drop_limit
 
 
 def score_rows(run,label,n,carrier=None):
@@ -69,9 +70,10 @@ def teacher_quality(run,label):
     clean=run/'images/teacher_clean_validation'; fp=run/'images'/label
     identity={'clean':[sha256(clean/image_name(i)) for i in range(len(rows))],
               'fingerprinted':[sha256(fp/image_name(i)) for i in range(len(rows))],
-              'clip_revision':CLIP_REV,'clip_drop_max':c['teacher_clip_drop_max'],
+              'clip_revision':CLIP_REV,'clip_drop_max':clip_drop_limit(c),
               'lpips_max':c['teacher_lpips_max'],'pairing':'identical prompt and Gaussian seed',
-              'lpips':'alex, version=0.1, lpips package 0.1.4'}
+              'lpips':'alex, version=0.1, lpips package 0.1.4',
+              'quality_policy':'clip_only_lpips_diagnostic' if is_threshold(c) else 'clip_and_lpips'}
     cg=read_json(clean/'generation.json'); fg=read_json(fp/'generation.json')
     if cg['seeds']!=fg['seeds'] or cg['prompts_sha256']!=fg['prompts_sha256']:
         raise ValueError('Teacher quality requires paired prompts and seeds')
@@ -102,7 +104,8 @@ def teacher_quality(run,label):
     clean_clip=sum(clips[0])/len(rows); fp_clip=sum(clips[1])/len(rows); lp=sum(distances)/len(rows)
     result={'identity':identity,'n':len(rows),'clean_clip':clean_clip,'fp_clip':fp_clip,
             'clip_drop':clean_clip-fp_clip,'paired_lpips':lp,
-            'passes':clean_clip-fp_clip<=c['teacher_clip_drop_max'] and lp<=c['teacher_lpips_max'],
+            'passes':quality_passes(c,clean_clip-fp_clip,lp),
+            'lpips_is_hard_gate':not is_threshold(c),
             'clip_definition':'same Serum utility: 2.5 * max(cos(image,text),0)',
             'clip_per_image_clean':clips[0],'clip_per_image_fp':clips[1],'lpips_per_image':distances}
     freeze(target,result)
@@ -138,10 +141,11 @@ def summarize(run):
         writer=csv.DictWriter(f,fieldnames=fields,extrasaction='ignore'); writer.writeheader(); writer.writerows(table)
     teacher_quality_report = read_json(run/'result/teacher_quality.json')
     quality_table = []
+    parameter='kappa' if 'kappa' in teacher_quality_report['selected'] else 'alpha'
     for candidate in teacher_quality_report['candidates']:
         q = candidate['quality']; metrics = candidate['metrics']
-        quality_table.append({'alpha': candidate['alpha'],
-            'selected': candidate['alpha'] == teacher_quality_report['selected']['alpha'],
+        quality_table.append({parameter: candidate[parameter],
+            'selected': candidate[parameter] == teacher_quality_report['selected'][parameter],
             'clean_clip': q['clean_clip'], 'fingerprinted_clip': q['fp_clip'], 'clip_drop': q['clip_drop'],
             'paired_lpips': q['paired_lpips'], 'quality_passes': q['passes'],
             'validation_tpr': metrics['detection_rate'], 'mean_score': metrics['mean_score'],
@@ -157,10 +161,10 @@ def summarize(run):
         fmt=lambda x:'unavailable' if x is None else f'{x:.5g}'
         lines.append(f"| {r['branch']} | {r['detection_rate']:.2%} | {r['mean_score']:.5g} | {r['bit_accuracy']:.1%} | {fmt(r['fid'])} | {fmt(r['kid'])} | {fmt(r['clip'])} |")
     lines += ['', '## Paired teacher validation quality', '',
-              '| Alpha | Selected | Clean CLIP | Fingerprinted CLIP | CLIP drop | Paired LPIPS | Quality pass |',
+              f'| {parameter.title()} | Selected | Clean CLIP | Fingerprinted CLIP | CLIP drop | Paired LPIPS | Quality pass |',
               '|---|---|---:|---:|---:|---:|---|']
     for q in quality_table:
-        lines.append(f"| {q['alpha']:g} | {q['selected']} | {q['clean_clip']:.5g} | {q['fingerprinted_clip']:.5g} | {q['clip_drop']:.5g} | {q['paired_lpips']:.5g} | {q['quality_passes']} |")
+        lines.append(f"| {q[parameter]:g} | {q['selected']} | {q['clean_clip']:.5g} | {q['fingerprinted_clip']:.5g} | {q['clip_drop']:.5g} | {q['paired_lpips']:.5g} | {q['quality_passes']} |")
     lines+=['','Teacher paired quality details: teacher_quality.json / teacher_quality.csv. Student checkpoint curves: checkpoint_metrics.csv.','']
     lines += ['- '+w for w in warnings]
     (run/'result/README.md').write_text('\n'.join(lines)+'\n',encoding='utf8')

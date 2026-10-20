@@ -50,7 +50,9 @@ class ResumeTests(unittest.TestCase):
             source=Path(d)/'old';source.mkdir();dest=Path(d)/'new';dest.mkdir()
             c=config_from_args(parse_args(['--train-n','4','--calibration-n','100','--validation-n','4',
                   '--validation-generation-n','2'],method='semantic_fp'))
-            c.pop('teacher_precision');c['teacher_checkpoint_every']=500
+            c.pop('teacher_precision');c.pop('teacher_objective');c.pop('teacher_kappas')
+            c.update(semantic_shift=.5,semantic_shift_sweep=None,lambda_preserve=1.,lambda_code=.1,lambda_perp=.01,lambda_cycle=.05)
+            c['teacher_checkpoint_every']=500
             write_json(source/'config.json',c)
             write_json(source/'prompts.json',{'train':[{'text':'test'}]*4})
             write_json(source/'assets.json',{'prompt_sha256':sha256(source/'prompts.json')})
@@ -87,6 +89,18 @@ class ResumeTests(unittest.TestCase):
             self.assertEqual(sha256(source/'carrier/complete.json'),sha256(dest/'carrier/complete.json'))
             self.assertEqual(sha256(source/'result/threshold_teacher.json'),sha256(dest/'result/threshold_teacher.json'))
             self.assertTrue((dest/'images/teacher_clean_train'/image_name(0)).exists())
+            from semantic_checkpoint import reuse_preparation_config
+            fresh=config_from_args(parse_args([],method='semantic_fp'))
+            reused=reuse_preparation_config(fresh,source)
+            self.assertEqual(reused['teacher_objective'],'threshold_cfg_v1')
+            self.assertNotIn('continuation',reused)
+            self.assertNotIn('semantic_shift',reused)
+            other=Path(d)/'reuse';other.mkdir();write_json(other/'config.json',reused)
+            prepare_continuation(other,reused)
+            self.assertTrue((other/'preparation_reuse.json').exists())
+            self.assertFalse((other/'teacher_fp').exists())
+            self.assertEqual(sha256(other/'carrier/complete.json'),sha256(source/'carrier/complete.json'))
+            self.assertEqual(before,{str(p):p.read_bytes() for p in source.rglob('*') if p.is_file()})
 
     def test_incomplete_checkpoint_ignored_and_changed_identity_rejected(self):
         from semantic_checkpoint import latest_full_checkpoint,save_training_state,restore_training_state

@@ -109,6 +109,7 @@ def align_loss_log(path,step,source=None,expected_hash=None):
 
 def continuation_config(source,precision='bf16'):
     from semantic_teacher_train import latest_teacher_adapters,candidate_tag
+    from semantic_threshold import candidate_parameter
     source=Path(source).resolve();c=read_json(source/'config.json')
     if c.get('watermark_method')!='semantic_fp':raise ValueError('Expected a semantic_fp source run')
     if (source/'teacher_fp/selected.json').exists():raise ValueError('Source teacher is already selected; use its original code to resume')
@@ -119,7 +120,7 @@ def continuation_config(source,precision='bf16'):
         for key,name in (('config_sha256','config.json'),('assets_sha256','assets.json'),('carrier_sha256','carrier/complete.json')):
             if proof[key]!=sha256(source/name):raise RuntimeError(f'Source protocol changed: {key}')
         if (path/'checkpoint.json').exists():verified_state(path)
-        targets[candidate_tag(alpha)]={'path':str(path),'step':int(path.name[11:]),
+        targets[candidate_tag(alpha,candidate_parameter(c))]={'path':str(path),'step':int(path.name[11:]),
             'adapter_sha256':sha256(path/'adapter_model.safetensors'),
             'adapter_config_sha256':sha256(path/'adapter_config.json'),
             'loss_log':str(candidate/'losses.jsonl'),'loss_log_sha256':sha256(candidate/'losses.jsonl'),
@@ -133,8 +134,9 @@ def prepare_continuation(run,config):
     """Fork prep artifacts; immutable data uses hard links, with copy fallback."""
     from semantic_carrier import SemanticCarrier
     from semantic_report import freeze_null
-    source=Path(config['continuation']['source']);run=Path(run)
-    if sha256(source/'config.json')!=config['continuation']['source_config_sha256']:
+    lineage=config.get('preparation_reuse') or config['continuation']
+    source=Path(lineage['source']);run=Path(run)
+    if sha256(source/'config.json')!=lineage['source_config_sha256']:
         raise RuntimeError('Continuation source config changed')
     def copy_file(src,dst):
         src,dst=Path(src),Path(dst)
@@ -156,4 +158,22 @@ def prepare_continuation(run,config):
         for row in read_json(directory/'image_hashes.json'):
             if sha256(directory/row['file_name'])!=row['sha256']:raise RuntimeError(f'Source image changed: {label}')
     SemanticCarrier.load(run/'carrier');freeze_null(run,'teacher')
-    write_json(run/'continuation.json',config['continuation'])
+    write_json(run/('preparation_reuse.json' if config.get('preparation_reuse') else 'continuation.json'),lineage)
+
+
+def reuse_preparation_config(config,source):
+    """Only reuse clean data/carrier/null; never import old fingerprint weights or losses."""
+    source=Path(source).resolve();prior=read_json(source/'config.json')
+    if prior.get('watermark_method')!='semantic_fp':raise ValueError('Expected semantic_fp preparation source')
+    if prior.get('teacher_batch',4)!=config['teacher_batch']:
+        raise ValueError('Preparation generation batch differs from new teacher effective batch; use fresh preparation')
+    # These define the actual reused clean data, carrier, key and null.
+    fields=('seed','key_seed','num_bits','carrier_pc_min','carrier_pc_max','stable_candidate_count',
+            'train_n','validation_n','calibration_n','test_n','fpr','teacher_snapshot','student_snapshot',
+            'cache','inference_steps','score_batch')
+    result={**config,**{k:prior[k] for k in fields if k in prior},
+            'preparation_reuse':{'source':str(source),'source_config_sha256':sha256(source/'config.json'),
+                                 'mode':'clean preparation only; all fingerprint teachers start from clean SD2.1'}}
+    if result['fpr']!=.01:raise ValueError('Threshold objective requires the clean 1%-FPR calibration')
+    if result['num_bits']!=8:raise ValueError('Threshold rescue protocol requires the existing 8-bit carrier')
+    return result

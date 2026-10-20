@@ -7,6 +7,8 @@ from pathlib import Path
 import torch
 from common import freeze, image_name, read_json, sha256, write_json, verify_vendor
 from semantic_carrier import SemanticCarrier, check_finite
+from semantic_threshold import (is_threshold,candidate_parameter,cfg_prediction,calibrated_shift_loss,
+                                frozen_calibration,FP_WEIGHT,CYCLE_WEIGHT)
 
 
 def fingerprint_ramp(step):
@@ -146,7 +148,7 @@ def stress_teacher(unet,ext,carrier,scheduler,z,text,alpha,config,folder,steps=1
                 step=((750+config['cycle_every']-1)//config['cycle_every']+index)*config['cycle_every']
                 if z.is_cuda: torch.cuda.reset_peak_memory_stats(z.device)
                 context={'phase':'teacher_check','probe':index+1,'timestep':timestep,
-                         'teacher_precision':precision,'alpha':alpha}
+                         'teacher_precision':precision,**{candidate_parameter(config):alpha}}
                 values=checked_teacher_step(named,optimizer,scaler,
                     lambda backward:teacher_backward(unet,ext,carrier,scheduler,noisy,text,t,alpha,config,step,backward,context),
                     folder/'failure.json',context)
@@ -208,6 +210,68 @@ def _teacher_microbatch_backward(unet, ext, carrier, scheduler, noisy, text, t,
     return values
 
 
+def _threshold_microbatch_backward(unet,ext,carrier,scheduler,noisy,text,empty,t,kappa,
+                                    config,step,total_batch,total_semantic,backward,diagnostic):
+    with torch.no_grad():
+        clean_c=ext.unet(noisy,t,encoder_hidden_states=text).sample
+        clean_u=ext.unet(noisy,t,encoder_hidden_states=empty).sample
+    dtype={'fp16':torch.float16,'bf16':torch.bfloat16,'no':torch.float32}[teacher_precision(config)]
+    with torch.autocast(noisy.device.type,dtype=dtype,enabled=teacher_precision(config)!='no'):
+        fp_c=unet(noisy,t,encoder_hidden_states=text).sample
+        fp_u=unet(noisy,t,encoder_hidden_states=empty).sample
+    check_finite(clean_c,clean_u,fp_c,fp_u)
+    watch_gradient(fp_c,'teacher conditional prediction');watch_gradient(fp_u,'teacher unconditional prediction')
+    preserve=.5*(fp_c.float()-clean_c.float()).square().mean()+.5*(fp_u.float()-clean_u.float()).square().mean()
+    ramp=1.;mask=t<=config['semantic_t_max'];selected=int(mask.sum().item())
+    batch_weight=len(noisy)/total_batch;semantic_weight=selected/total_semantic if total_semantic else 0.
+    sem=sem_cycle=preserve.new_zeros(())
+    stats={name:0. for name in ('mean_r0','mean_rfp','mean_required_shift','proxy_tpr','shift_cap_fraction',
+           'cycle_mean_r0','cycle_mean_rfp','cycle_mean_required_shift','cycle_proxy_tpr','cycle_shift_cap_fraction')}
+    if selected and ramp>0:
+        frozen=config['teacher_calibration'];tau=frozen['threshold'];sigma=frozen['sigma_clean']
+        with torch.no_grad():
+            z0=predicted_x0(scheduler,noisy[mask],cfg_prediction(clean_c,clean_u)[mask],t[mask])
+            q0=carrier.coordinates(ext.encode_latent(z0,text_hidden=text[mask]))
+            q0_cycle=carrier.coordinates(ext.encode_latent(ext.cycle(z0),text_hidden=text[mask]))
+        zfp=watch_gradient(predicted_x0(scheduler,noisy[mask],cfg_prediction(fp_c,fp_u)[mask],t[mask]),'CFG predicted_x0')
+        features=watch_gradient(ext.encode_latent(zfp,text_hidden=text[mask]),'CFG semantic features')
+        qfp=carrier.coordinates(features)
+        sem,raw=calibrated_shift_loss(q0,qfp,carrier.signs,tau,sigma,kappa)
+        cycle_z=watch_gradient(ext.cycle(zfp),'CFG VAE cycle output')
+        cycle_features=watch_gradient(ext.encode_latent(cycle_z,text_hidden=text[mask]),'CFG cycle features')
+        qfp_cycle=carrier.coordinates(cycle_features)
+        sem_cycle,cycled=calibrated_shift_loss(q0_cycle,qfp_cycle,carrier.signs,tau,sigma,kappa)
+        stats.update(raw);stats.update({'cycle_'+key:value for key,value in cycled.items()})
+    fp=sem+CYCLE_WEIGHT*sem_cycle
+    loss=preserve*batch_weight+ramp*FP_WEIGHT*fp*semantic_weight
+    check_finite(loss)
+    values={'loss':loss.detach().item(),'preserve':preserve.detach().item()*batch_weight,
+            'sem':sem.detach().item()*semantic_weight,'sem_cycle':sem_cycle.detach().item()*semantic_weight,
+            'fp':fp.detach().item()*semantic_weight,**{key:value*semantic_weight for key,value in stats.items()}}
+    if diagnostic is not None:diagnostic['microbatch_losses']=values
+    backward(loss)
+    return values
+
+
+def threshold_teacher_backward(unet,ext,carrier,scheduler,noisy,text,timesteps,kappa,config,step,backward,diagnostic=None):
+    batch=len(noisy);micro=config.get('teacher_micro_batch',1)
+    if batch<1 or micro<1:raise ValueError('Teacher batch/microbatch must be positive')
+    selected=int((timesteps<=config['semantic_t_max']).sum().item())
+    empty=ext.text(['']*batch)
+    result={}
+    for start in range(0,batch,micro):
+        end=min(start+micro,batch)
+        if diagnostic is not None:diagnostic.update(microbatch_start=start,microbatch_timesteps=timesteps[start:end].cpu().tolist())
+        values=_threshold_microbatch_backward(unet,ext,carrier,scheduler,noisy[start:end],text[start:end],empty[start:end],
+              timesteps[start:end],kappa,config,step,batch,selected,backward,diagnostic)
+        for key,value in values.items():result[key]=result.get(key,0.)+value
+    if selected==0:
+        for key in result:
+            if key.startswith(('mean_','proxy_','shift_','cycle_')):result[key]=None
+    return {**result,'ramp':1.,'semantic_fraction':selected/batch,
+            'target_score':config['teacher_calibration']['threshold']+kappa*config['teacher_calibration']['sigma_clean']}
+
+
 def teacher_backward(unet, ext, carrier, scheduler, noisy, text, timesteps, alpha, config, step, backward, diagnostic=None):
     """Accumulate the original full-batch objective with bounded forward batches.
 
@@ -215,6 +279,8 @@ def teacher_backward(unet, ext, carrier, scheduler, noisy, text, timesteps, alph
     images in the effective batch, not separately over each microbatch. The caller
     performs exactly one unscale/clip/optimizer update after this function.
     """
+    if is_threshold(config):
+        return threshold_teacher_backward(unet,ext,carrier,scheduler,noisy,text,timesteps,alpha,config,step,backward,diagnostic)
     batch = len(noisy)
     micro = config.get('teacher_micro_batch', 1)
     if batch < 1 or micro < 1:
@@ -234,7 +300,8 @@ def teacher_backward(unet, ext, carrier, scheduler, noisy, text, timesteps, alph
 
 def latest_teacher_adapters(run):
     found=[]
-    for candidate in sorted((Path(run)/'teacher_fp/candidates').glob('shift_*')):
+    for candidate in sorted(list((Path(run)/'teacher_fp/candidates').glob('shift_*'))+
+                            list((Path(run)/'teacher_fp/candidates').glob('kappa_*'))):
         if (candidate/'trained.json').exists():
             source=candidate
             for name,digest in read_json(candidate/'trained.json')['files'].items():
@@ -245,7 +312,7 @@ def latest_teacher_adapters(run):
                          and (p/'adapter_config.json').exists()]
             if not checkpoints: continue
             source=max(checkpoints,key=lambda p:int(p.name[11:]))
-        found.append((float(candidate.name[len('shift_'):]),source))
+        found.append((float(candidate.name.split('_',1)[1]),source))
     if not found: raise ValueError('No saved teacher adapter found; a fresh run performs its own early check')
     return found
 
@@ -263,6 +330,7 @@ def check_existing_run(run, precision='bf16', steps=32):
     c=read_json(run/'config.json')
     if c.get('watermark_method')!='semantic_fp': raise ValueError('Expected a semantic_fp run')
     c={**c,'teacher_precision':precision}
+    if is_threshold(c):c={**c,'teacher_calibration':frozen_calibration(run)}
     targets=latest_teacher_adapters(run)
     assets=read_json(run/'assets.json'); rows=read_json(run/'prompts.json')['train']
     images=run/'images/teacher_clean_train'
@@ -273,7 +341,7 @@ def check_existing_run(run, precision='bf16', steps=32):
     output.mkdir(parents=True,exist_ok=False)
     print(f'Teacher diagnostic only; reports: {output}',flush=True)
     for alpha,source in targets:
-        candidate=source if source.name.startswith('shift_') else source.parent
+        candidate=source if source.name.startswith(('shift_','kappa_')) else source.parent
         proof=read_json(candidate/'protocol.json')
         for key,path in (('config_sha256',run/'config.json'),('assets_sha256',run/'assets.json'),
                          ('carrier_sha256',run/'carrier/complete.json')):
@@ -310,12 +378,16 @@ def train_one(run, alpha, folder):
     from semantic_teacher import extractor, pixels, numerical_policy
     verify_vendor(); numerical_policy()
     c=read_json(run/'config.json'); assets=read_json(run/'assets.json')
+    if is_threshold(c):c={**c,'teacher_calibration':frozen_calibration(run)}
     protocol={'config_sha256':sha256(run/'config.json'),'assets_sha256':sha256(run/'assets.json'),
-              'carrier_sha256':sha256(run/'carrier/complete.json'),'alpha':alpha,
+              'carrier_sha256':sha256(run/'carrier/complete.json'),candidate_parameter(c):alpha,
               'restart_policy':'restore full checkpoint; explicit legacy continuation uses fresh optimizer',
               'training_images_sha256':sha256(run/'images/teacher_clean_train/image_hashes.json'),
               'micro_batch':c.get('teacher_micro_batch',1), 'reference_cycle_checkpointing':True,
               'teacher_precision':teacher_precision(c), 'numerical_check_steps':12}
+    if is_threshold(c):
+        protocol['objective']=c['teacher_objective']
+        protocol['calibration_target_sha256']=sha256(run/'teacher_fp/calibration_target.json')
     folder.mkdir(parents=True,exist_ok=True); freeze(folder/'protocol.json',protocol)
     if (folder/'trained.json').exists():
         old=read_json(folder/'trained.json')
@@ -330,7 +402,7 @@ def train_one(run, alpha, folder):
     config=LoraConfig(r=c['teacher_rank'],lora_alpha=c['teacher_rank'],init_lora_weights='gaussian',
                       target_modules=adapter_targets(unet))
     full_checkpoint=latest_full_checkpoint(folder)
-    initial=(c.get('continuation',{}).get('checkpoints',{}).get(candidate_tag(alpha))
+    initial=(c.get('continuation',{}).get('checkpoints',{}).get(candidate_tag(alpha,candidate_parameter(c)))
              if full_checkpoint is None else None)
     if initial:
         from student import load_adapter
@@ -390,7 +462,7 @@ def train_one(run, alpha, folder):
                 t=torch.randint(0,scheduler.config.num_train_timesteps,(len(ids),),generator=rng).to('cuda')
                 noisy=scheduler.add_noise(z,noise,t)
             torch.cuda.reset_peak_memory_stats()
-            context={'phase':'train','step':step+1,'alpha':alpha,'image_ids':ids,
+            context={'phase':'train','step':step+1,**{candidate_parameter(c):alpha},'image_ids':ids,
                      'timesteps':t.cpu().tolist(),'teacher_precision':teacher_precision(c)}
             measured=checked_teacher_step([(n,p) for n,p in unet.named_parameters() if p.requires_grad],
                 optimizer,scaler,
@@ -400,7 +472,7 @@ def train_one(run, alpha, folder):
                  'effective_batch':len(ids),'micro_batch':c.get('teacher_micro_batch',1),
                  'peak_allocated_gib':torch.cuda.max_memory_allocated()/1024**3}
             log.write(json.dumps(raw,allow_nan=False)+'\n'); log.flush()
-            if (step+1)%25==0: print(f'Teacher alpha={alpha}: {raw}',flush=True)
+            if (step+1)%25==0: print(f'Teacher {candidate_parameter(c)}={alpha}: {raw}',flush=True)
             if (step+1)%c['teacher_checkpoint_every']==0 or step+1==c['teacher_train_steps']:
                 checkpoint=folder/f'checkpoint-{step+1}'
                 save_adapter(unet,checkpoint,config)
@@ -452,17 +524,18 @@ def merge_teacher(run, folder):
     return target
 
 
-def candidate_tag(alpha):
+def candidate_tag(alpha,parameter="alpha"):
     """Round-trip float spelling prevents distinct strengths sharing artifacts."""
     alpha = float(alpha)
     if not math.isfinite(alpha) or alpha <= 0:
         raise ValueError('Candidate strength must be positive and finite')
-    return f'shift_{alpha!r}'
+    return f'{"kappa" if parameter=="kappa" else "shift"}_{alpha!r}'
 
 
 def choose_candidate(candidates):
     for row in candidates:
-        candidate_tag(row['alpha'])
+        parameter='kappa' if 'kappa' in row else 'alpha'
+        candidate_tag(row[parameter],parameter)
         metrics = row['metrics']
         if (not math.isfinite(metrics['detection_rate']) or not 0 <= metrics['detection_rate'] <= 1
                 or not math.isfinite(metrics['mean_score'])):
@@ -475,7 +548,7 @@ def choose_candidate(candidates):
                 raise ValueError('Nonfinite teacher candidate quality')
     valid=[r for r in candidates if r['quality']['passes'] is True]
     if not valid: raise ValueError('No teacher candidate passed the quality gate; student training stopped')
-    return max(valid,key=lambda r:(r['metrics']['detection_rate'],r['metrics']['mean_score'],-r['alpha']))
+    return max(valid,key=lambda r:(r['metrics']['detection_rate'],r['metrics']['mean_score'],-r['kappa' if 'kappa' in r else 'alpha']))
 
 
 def train_candidates(run):
@@ -488,13 +561,41 @@ def train_candidates(run):
         selected=read_json(selected_path)
         if snapshot_identity(run/selected['model'])!=selected['model_hashes']: raise RuntimeError('Selected teacher changed')
         if selected['config_sha256']!=sha256(run/'config.json'): raise RuntimeError('Teacher selection config changed')
-        chosen={k:selected[k] for k in ('alpha','model','metrics','quality')} if selected['downstream_ready'] else None
+        parameter='kappa' if 'kappa' in selected else 'alpha'
+        chosen=(next(row for row in selected['candidates']
+                     if row[parameter]==selected[parameter] and row['model']==selected['model'])
+                if selected['downstream_ready'] else None)
         if chosen is not None:
             freeze(run/'result/teacher_quality.json',{'selected':chosen,'candidates':selected['candidates']})
         if not selected['downstream_ready']:
             raise ValueError('Frozen teacher failed the validation detection gate; resume cannot bypass it')
         return
     threshold=read_json(run/'result/threshold_teacher.json')['threshold']
+    if is_threshold(c):
+        frozen_calibration(run)
+        from semantic_candidates import run_workers
+        run_workers(run,c['teacher_kappas'])
+        candidates=[]
+        calibration=read_json(run/'teacher_fp/calibration_target.json')
+        for k in c['teacher_kappas']:
+            record=read_json(root/'candidates'/candidate_tag(k,'kappa')/'validation.json')
+            if (record['kappa']!=k or record['config_sha256']!=sha256(run/'config.json') or record['calibration']!=calibration
+                    or record['model_hashes']!=snapshot_identity(run/record['model'])):
+                raise RuntimeError('Candidate validation provenance changed')
+            candidates.append(record)
+        freeze(root/'candidates.json',{'objective':c['teacher_objective'],'candidates':candidates})
+        chosen=choose_candidate(candidates)
+        selection={**chosen,'candidates':candidates,
+                   'selection_rule':'CLIP-drop gate; highest validation TPR, mean score, lower kappa; LPIPS diagnostic only',
+                   'config_sha256':sha256(run/'config.json'),'model_hashes':snapshot_identity(run/chosen['model']),
+                   'teacher_threshold_sha256':sha256(run/'result/threshold_teacher.json'),
+                   'calibration_target_sha256':sha256(run/'teacher_fp/calibration_target.json'),
+                   'test_used':False,'downstream_ready':chosen['metrics']['detection_rate']>=c['teacher_min_tpr']}
+        freeze(selected_path,selection)
+        freeze(run/'result/teacher_quality.json',{'selected':chosen,'candidates':candidates})
+        if not selection['downstream_ready']:
+            raise ValueError('All teacher kappa candidates below required validation TPR; students stopped. See teacher_fp/candidates.json')
+        return
     candidates=[]
     for alpha in c.get('semantic_shift_sweep') or [c['semantic_shift']]:
         tag=candidate_tag(alpha)
@@ -518,3 +619,25 @@ def train_candidates(run):
     freeze(run/'result/teacher_quality.json',{'selected':chosen,'candidates':candidates})
     if not selection['downstream_ready']:
         raise ValueError('Teacher validation detection below --teacher-min-tpr; inspect teacher objective before students')
+
+
+def train_threshold_candidate(run,kappa):
+    """Independent worker, always initialized from clean SD2.1 unless exact-resumed."""
+    from semantic_teacher import generate_set,score
+    from semantic_report import detection_metrics,teacher_quality
+    from semantic_assets import snapshot_identity
+    c=read_json(run/'config.json')
+    if not is_threshold(c) or kappa not in c['teacher_kappas']:
+        raise ValueError('Worker candidate not in frozen threshold objective configuration')
+    calibration=frozen_calibration(run)
+    tag=candidate_tag(kappa,'kappa');folder=run/'teacher_fp/candidates'/tag
+    train_one(run,kappa,folder);model=merge_teacher(run,folder)
+    label=f'candidate_{tag}_validation'
+    generate_set(run,model,'validation',label);score(run,[label])
+    metrics=detection_metrics(run,label,calibration['threshold'],c['validation_n'])
+    record={'kappa':kappa,'target_score':calibration['threshold']+kappa*calibration['sigma_clean'],
+            'objective':c['teacher_objective'],'model':str(model.relative_to(run)),
+            'metrics':metrics,'quality':teacher_quality(run,label),
+            'calibration':calibration,'model_hashes':snapshot_identity(model),
+            'config_sha256':sha256(run/'config.json')}
+    freeze(folder/'validation.json',record)

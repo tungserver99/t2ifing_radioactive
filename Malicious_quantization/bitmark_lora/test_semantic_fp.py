@@ -403,5 +403,11 @@ class FinalReportTests(unittest.TestCase):
             text=(run/'result/README.md').read_text(encoding='utf8')
             self.assertIn('Clean CLIP',text)
             self.assertIn('lora_r32_conv_wm',text)
+            chosen={k:v for k,v in chosen.items() if k!='alpha'};chosen['kappa']=1.5
+            write_json(run/'result/teacher_quality.json',{'selected':chosen,'candidates':[chosen]})
+            summarize(run)
+            with (run/'result/teacher_quality.csv').open() as f:quality=list(csv.DictReader(f))
+            self.assertEqual(float(quality[0]['kappa']),1.5)
+            self.assertIn('| Kappa |',(run/'result/README.md').read_text(encoding='utf8'))
 
 if __name__ == '__main__': unittest.main()
