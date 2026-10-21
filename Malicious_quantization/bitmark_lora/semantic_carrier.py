@@ -4,6 +4,7 @@ import random
 from pathlib import Path
 import torch
 from common import freeze, read_json, sha256, write_json
+from semantic_sign import OBJECTIVE, is_sign, detection_count, image_bits
 
 
 def check_finite(*values):
@@ -39,10 +40,22 @@ def choose_key(candidates, num_bits, key_seed):
 
 
 class SemanticCarrier:
-    def __init__(self, mean, basis, sigmas, signs, selected_pc_indices):
+    def __init__(self, mean, basis, sigmas, signs, selected_pc_indices,
+                 carrier_version=None, medians=None, metadata=None):
         self.mean, self.basis = mean.float(), basis.float()
         self.sigmas, self.signs = sigmas.float(), signs.float()
         self.selected_pc_indices = list(selected_pc_indices)
+        self.carrier_version = carrier_version
+        self.metadata = dict(metadata or {})
+        self.medians = None if medians is None else medians.float()
+        if carrier_version not in (None, OBJECTIVE):
+            raise ValueError(f'Unsupported carrier version: {carrier_version}')
+        if carrier_version == OBJECTIVE:
+            if self.medians is None or self.medians.shape != self.sigmas.shape:
+                raise ValueError('Sign carrier requires one median per selected PC')
+            check_finite(self.medians)
+        elif self.medians is not None:
+            raise ValueError('Historical carrier cannot have sign medians')
         check_finite(self.mean, self.basis, self.sigmas, self.signs)
         d, m = self.basis.shape
         if (self.mean.shape != (d,) or self.sigmas.shape != (m,) or self.signs.shape != (m,)
@@ -52,20 +65,30 @@ class SemanticCarrier:
         torch.testing.assert_close(self.basis.T @ self.basis, torch.eye(m, device=basis.device), atol=2e-5, rtol=2e-5)
 
     def to(self, device):
-        return SemanticCarrier(*(x.to(device) for x in (self.mean, self.basis, self.sigmas, self.signs)), self.selected_pc_indices)
+        return SemanticCarrier(*(x.to(device) for x in (self.mean, self.basis, self.sigmas, self.signs)),
+                               self.selected_pc_indices, carrier_version=self.carrier_version,
+                               medians=None if self.medians is None else self.medians.to(device),
+                               metadata=self.metadata)
 
-    def coordinates(self, features):
+    def normalized_coordinates(self, features):
         check_finite(features)
-        q = ((features.float() - self.mean) @ self.basis) / (self.sigmas + 1e-8)
+        # Keep the historical epsilon exactly. New artifacts use the defined q.
+        divisor = self.sigmas if self.carrier_version == OBJECTIVE else self.sigmas + 1e-8
+        q = ((features.float() - self.mean) @ self.basis) / divisor
         check_finite(q)
         return q
+
+    def coordinates(self, features):
+        q = self.normalized_coordinates(features)
+        return q - self.medians if self.carrier_version == OBJECTIVE else q
 
     def scalar_score(self, features):
         return (self.coordinates(features) * self.signs).mean(-1)
 
     def bit_metrics(self, coordinates):
         check_finite(coordinates)
-        recovered = coordinates.mean(0).sign()
+        recovered = (image_bits(coordinates.mean(0)) if self.carrier_version == OBJECTIVE
+                     else coordinates.mean(0).sign())
         return {'mean_coordinates': coordinates.mean(0).tolist(), 'recovered_signs': recovered.tolist(),
                 'bit_accuracy': (recovered == self.signs).float().mean().item()}
 
@@ -81,8 +104,19 @@ class SemanticCarrier:
             raise RuntimeError('PCA/key mismatch')
         pca = torch.load(folder / 'pca.pt', map_location='cpu', weights_only=True)
         selected = key['selected_pc_indices']
+        version = key.get('carrier_version')
+        medians = None
+        if version == OBJECTIVE:
+            centers = read_json(folder / 'medians.json')
+            if centers['carrier_fit_prompt_sha256'] != key['carrier_fit_prompt_sha256']:
+                raise RuntimeError('Median/key train provenance mismatch')
+            lookup = dict(zip(centers['pc_indices'], centers['medians']))
+            medians = torch.tensor([lookup[j] for j in selected])
+            if medians.tolist() != torch.tensor(key['medians']).tolist():
+                raise RuntimeError('Median/key coordinate mismatch')
         return cls(pca['mean'], pca['basis'][:, selected], torch.tensor(key['sigmas']),
-                   torch.tensor(key['signs']), selected).to(device)
+                   torch.tensor(key['signs']), selected, carrier_version=version,
+                   medians=medians, metadata=key).to(device)
 
 
 class _MidBlockReady(Exception):
@@ -180,7 +214,18 @@ def stability_metrics(features, cycle_features, mean, basis, variance, pc_min, p
 def save_carrier(folder, features, cycle_features, config, provenance):
     folder = Path(folder); folder.mkdir(parents=True, exist_ok=True)
     if (folder/'complete.json').exists():
-        SemanticCarrier.load(folder)
+        existing = SemanticCarrier.load(folder)
+        if is_sign(config):
+            if existing.carrier_version != OBJECTIVE:
+                raise RuntimeError('Cannot reuse historical carrier for a sign run')
+            key = existing.metadata
+            expected = {name: config[name] for name in ('num_bits', 'stable_candidate_count',
+                        'key_seed', 'carrier_pc_min', 'carrier_pc_max')}
+            expected.update(alpha_test=config.get('analytic_alpha', .01))
+            if any(key.get(name) != value for name, value in expected.items()):
+                raise RuntimeError('Frozen sign carrier/key settings changed')
+        elif existing.carrier_version == OBJECTIVE:
+            raise RuntimeError('Cannot reinterpret sign carrier as historical carrier')
         freeze(folder/'provenance.json', provenance)
         return
     mean, basis, variance = fit_pca(features)
@@ -188,16 +233,39 @@ def save_carrier(folder, features, cycle_features, config, provenance):
                                config['carrier_pc_min'], config['carrier_pc_max'])
     count = config['stable_candidate_count']
     if len(stable) < count: raise ValueError('Too few candidate PCs')
+    median_payload = None
+    if is_sign(config):
+        # Fit all candidate-PC midpoint medians before sampling either PCs/signs.
+        candidate_pcs = list(range(config['carrier_pc_min'], config['carrier_pc_max'] + 1))
+        q = ((features.detach().cpu().float()-mean) @ basis[:, candidate_pcs]) / variance[candidate_pcs].sqrt()
+        check_finite(q)
+        midpoint = torch.quantile(q, .5, dim=0, interpolation='midpoint')
+        median_payload = {'carrier_version': OBJECTIVE, 'pc_indices': candidate_pcs,
+                          'medians': midpoint.tolist(), 'fit_split': 'carrier_train',
+                          'carrier_fit_prompt_sha256': provenance['train_prompt_sha256'],
+                          'median_rule': 'midpoint', 'train_feature_count': len(features)}
     selected, signs = choose_key([r['pc'] for r in stable[:count]], config['num_bits'], config['key_seed'])
     temporary = folder/'pca.partial'
     torch.save({'mean': mean, 'basis': basis, 'variance': variance, 'feature_dimension': len(mean)}, temporary)
     temporary.replace(folder/'pca.pt')
-    freeze(folder/'key.json', {'key_seed': config['key_seed'], 'num_bits': config['num_bits'],
+    key = {'key_seed': config['key_seed'], 'num_bits': config['num_bits'],
         'selected_pc_indices': selected, 'signs': signs, 'sigmas': variance[selected].sqrt().tolist(),
         'basis_sha256': sha256(folder/'pca.pt'), 'carrier_fit_prompt_sha256': provenance['train_prompt_sha256'],
         'index_convention': 'zero-based inclusive PC range',
-        'selection_rule': 'correlation descending, sign retention descending, PC ascending; RNG sample without replacement'})
+        'selection_rule': 'correlation descending, sign retention descending, PC ascending; RNG sample without replacement'}
+    if is_sign(config):
+        centers = dict(zip(median_payload['pc_indices'], median_payload['medians']))
+        alpha = config.get('analytic_alpha', .01)
+        key.update(carrier_version=OBJECTIVE, stable_candidate_count=count,
+                   carrier_pc_min=config['carrier_pc_min'], carrier_pc_max=config['carrier_pc_max'],
+                   medians=[centers[j] for j in selected], bit_tie_rule='r >= 0 -> +1; r < 0 -> -1',
+                   analytic_null='key_randomization_binomial', alpha_test=alpha,
+                   k_detect=detection_count(config['num_bits'], alpha))
+        freeze(folder/'medians.json', median_payload)
+    freeze(folder/'key.json', key)
     freeze(folder/'stability.json', stable)
     freeze(folder/'provenance.json', provenance)
-    freeze(folder/'complete.json', {name: sha256(folder/name) for name in ('pca.pt','key.json','stability.json','provenance.json')})
+    artifacts = ['pca.pt', 'key.json', 'stability.json', 'provenance.json']
+    if is_sign(config): artifacts.append('medians.json')
+    freeze(folder/'complete.json', {name: sha256(folder/name) for name in artifacts})
     SemanticCarrier.load(folder)

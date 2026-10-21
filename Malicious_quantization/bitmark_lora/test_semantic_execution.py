@@ -64,13 +64,13 @@ class FeatureExecutionTests(unittest.TestCase):
 
 class ExecutionUpgradeTests(unittest.TestCase):
     def test_upgrade_is_explicit_narrow_audited_and_preserves_training_state(self):
-        from semantic_execution import upgrade_execution_manifest,BASELINE_HASHES
+        from semantic_execution import upgrade_execution_manifest,BASELINE_HASHES,TARGET_HASHES
         from common import write_json,read_json,sha256,HERE
         with tempfile.TemporaryDirectory() as d:
             run=Path(d)
             old={name:values[0] for name,values in BASELINE_HASHES.items()}
             old['other.py']='unchanged'
-            new={**old,'semantic_carrier.py':sha256(HERE/'semantic_carrier.py'),'run.py':sha256(HERE/'run.py'),
+            new={**old,'semantic_carrier.py':TARGET_HASHES['semantic_carrier.py'],'run.py':TARGET_HASHES['run.py'],
                  'semantic_execution.py':'newpolicy','test_semantic_execution.py':'newtests'}
             write_json(run/'code_manifest.json',old)
             write_json(run/'config.json',{'watermark_method':'semantic_fp','teacher_objective':'threshold_cfg_v1'})

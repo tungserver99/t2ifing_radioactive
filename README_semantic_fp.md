@@ -1,90 +1,68 @@
-# Native semantic radioactive fingerprint
+# Redundant semantic sign fingerprint (RSSF)
 
-The current teacher experiment is **threshold_cfg_v1**, the user-requested revision described in [docs/threshold_cfg_v1.md](docs/threshold_cfg_v1.md). It replaces the original fixed-alpha teacher loss and changes paired LPIPS from a hard gate to a diagnostic. The original specification remains historical; carrier, verifier and student protocol remain the same.
+The current default is `semantic_sign_v1`, defined by [the locked specification](semantic_sign_fingerprint_codex_spec.md). The historical `threshold_cfg_v1` implementation remains separate; old completed runs can still be analyzed with `--analyze OLD_RUN`.
 
-Run from the repository root after preparing your own server environment:
+Run from the repository root in your own server environment:
 
 ```bash
 bash run_semantic_fp.sh
 ```
 
-The launcher contains only a shebang and `python main.py "$@"`. It activates no environment, installs nothing, sets no environment variables and embeds no interpreter path. `main.py` runs every stage.
-
-To reuse the exact clean data, PCA/key and threshold from the completed old preparation while starting all fingerprint teachers from clean SD2.1:
+Use existing verified clean preparation to save generation time:
 
 ```bash
-bash run_semantic_fp.sh --reuse-preparation run_semantic_fp_20261019_225912_275755
+bash run_semantic_fp.sh --reuse-preparation run_semantic_fp_20261020_135117_009783
 ```
 
-This creates a separate run and records source hashes. It does not resume the old alpha=0.5 teacher or reset a partially trained new teacher. All three new candidates start clean. Reuse uses immutable hard links with copy fallback; source artifacts must remain unchanged. A source generation batch inconsistent with the new effective teacher batch is rejected.
+This reuses only clean images/prompts/assets with matching hashes, Gaussian seeds, snapshots and preprocessing. It rebuilds PCA/stability, the top48 PC pool in PC8..64, the32-bit secret, train-only midpoint medians, scores and calibration. It never imports old keys, thresholds or fingerprint weights. Key seed remains the source experiment key seed; all new candidates share the newly frozen carrier/key. No existing result is overwritten.
 
-## Teacher objective and candidates
+## Teacher and verifier
 
-Default kappas are 1.0, 1.5 and 2.0. The target is the frozen teacher clean threshold plus kappa times the measured clean-score population standard deviation (ddof0). Conditional and empty-prompt unconditional preservation each have weight0.5. Semantic predicted-x0 uses CFG7.5. The bounded, detached required shift is applied along the secret signs. The semantic loss averages batch and bits; the same constraint is applied through the differentiable VAE cycle on every selected update.
+32 selected median-centered semantic coordinates define bits (`r>=0` maps to +1). Exact Binomial(32,.5) tails derive `K_detect=24` at alpha=.01; the training buffer+2 gives26 easiest clean-selected bits. The squared hinge uses only those clean-selected bits and stops pushing each bit after positive margin mu.
+
+Three independent margins mu=.10/.20/.30 start from the same clean SD2.1 and seed. Teacher remains rank32 attention+Conv LoRA, LR1e-4, AdamW,3000 updates, effective batch4/micro1, BF16. Native inference stays ordinary merged SD2.1 with Gaussian generators and CFG7.5.
+
+Each optimizer update has full-range conditional/unconditional preservation plus an independent late decoded-image fingerprint/quality path. Five unique final native inference timestep IDs come from the actual saved scheduler at50 steps; selected alphas must match the training scheduler. The real differentiable image channel is VAE decode/clamp[-1,1] -> posterior mean encode -> frozen t0 mid-block GAP -> centered PCA coordinates. Quality is frozen AlexNet LPIPS plus pixel MSE on those same paired images.
 
 ```text
-L_fp = L_sem + 0.5 * L_sem_cycle
-L_total = L_preserve + 0.8 * L_fp
+L_total = L_preserve + 0.8*L_fp + (LPIPS + pixel_MSE)
 ```
 
-There is no active fixed-alpha, perpendicular, old separate cycle-weight or margin loss. Unlike the original trial, this objective applies from step zero, without the historical warmup/ramp. Semantic mask remains t<=500. The loss uses predicted-x0 proxies; final validation still uses actual native PNG generation, not proxy TPR.
+No empirical threshold, kappa, relative shift, broad semantic timestep mask, perpendicular penalty or separate cycle term is active in RSSF. This is one teacher-training phase; the two paths contribute to one optimizer update.
 
-Teacher defaults: clean SD2.1; rank32 attention+Conv LoRA; LR1e-4; AdamW; 3000 updates; effective batch4; microbatch1; BF16 (independent of student FP16); clip1. Frozen reference UNet/VAE/text and score math remain FP32. Activation checkpointing bounds retained differentiation graphs. Finite guards remain active before optimizer updates; gradient norm reduction uses FP64.
+Before student training, actual native validation PNGs must pass analytic TPR>=.90, CLIP drop<=.01 and paired LPIPS<=.15. Passing candidates are ranked by lowest LPIPS, then pixel MSE, then mu. A failed campaign saves all diagnostics and stops without modifying the key/gates or launching students.
 
-On three visible GPUs, three isolated candidate processes can run concurrently. On one GPU40GB, candidates run sequentially with one model-training process per GPU. This avoids placing all three teacher graphs on the same GPU. Each candidate receives the same seed/clean initialization and its own optimizer/state/artifacts. GPU memory of the revised real model must be measured on the server.
+The analytic null randomizes the precommitted secret signs conditional on a key-independent image/model; it does not assume independent PCA coordinates. It is not a guarantee of nominal image FPR for the one deployed key. Fixed-key clean FPR and1000 deterministic fake-sign null checks are reported without rerolling the key. Continuous scores with disjoint teacher/student clean calibration remain secondary metrics and never enter teacher loss.
 
-## Validation and student settings
+## Students and checkpoints
 
-Teacher thresholds still use 5000 clean calibration images at empirical1%FPR. The student family has its own frozen unadapted SD1.4 threshold. The carrier/key/statistic are shared. Kappa target fitting uses neither teacher validation nor final test.
-
-Choose highest teacher validation TPR among candidates with CLIP drop<=0.01, then mean score, then lower kappa. Paired LPIPS is reported and checked for finiteness, not used as a hard gate. Require teacher validation TPR>=0.90 before students. Failed gates stop the run without changing student training. A high aggregate bit accuracy does not replace the per-image detection rate.
-
-Student protocol is unchanged: 5000 train/1000 validation/5000 calibration/1000 test prompts; batch8; FP16; 7500 steps; snapshots2500/5000/7500; LoRA/DoRA LR1e-5 and full LR5e-6; inference50/CFG7.5/resolution512. Pilot evaluates unadapted SD1.4, attention+Conv LoRA r32 and full UNet. Full evaluates the original six branches. Only held-out denoising MSE selects student checkpoints, never fingerprint diagnostics.
+SD1.4 students are unchanged: pilot unadapted baseline + attention/Conv LoRA r32 + full UNet;7500 updates, batch8, FP16, checkpoint2500/5000/7500, selection solely by held-out denoising MSE. Fingerprint diagnostics are reporting only. `--setting full` retains the existing full set of branches.
 
 ```bash
-# Inspect the protocol without models, downloads or GPU work.
 python main.py --plan-only
-
-# All six student branches, after the teacher candidates pass.
-bash run_semantic_fp.sh --setting full
-
-# Exact resume of an interrupted NEW run with unchanged code/config/environment.
-bash run_semantic_fp.sh --resume run_semantic_fp_YYYYMMDD_HHMMSS_...
-
-# Numerical probe of the latest saved adapters (diagnostic only).
-python main.py --teacher-check run_semantic_fp_YYYYMMDD_HHMMSS_...
-
-# Longer standalone probe or FP32 comparison.
-python main.py --teacher-check run_semantic_fp_YYYYMMDD_HHMMSS_... --teacher-check-steps 64
-python main.py --teacher-check run_semantic_fp_YYYYMMDD_HHMMSS_... --teacher-precision no
+bash run_semantic_fp.sh --resume YOUR_NEW_RSSF_RUN
+python main.py --analyze COMPLETED_RUN
+python main.py --teacher-check YOUR_NEW_RSSF_RUN
 ```
 
-The historical --continue-from path is a weights-only warm start with reset optimizer and retains its source objective. It is not the way to start this new experiment; use --reuse-preparation to keep clean data while starting new teachers clean.
+Strict resume uses the same frozen config/code/environment and restores full weights, AdamW/scaler, sampler order/offset and CPU/CUDA/Python RNG. It continues from the latest complete checkpoint every100 updates, replaying any later unsaved updates. Twelve scratch readiness updates check gradients/VRAM and restore weights/RNG before training. `--teacher-check` is only a fresh-optimizer diagnostic. `--upgrade-execution` belongs to the historical threshold optimization and cannot migrate a threshold teacher into RSSF. Historical `--continue-from` retains its historical source objective; RSSF does not warm-start candidates.
 
-## Checkpoints, logs and models
+## Results and images
 
-Runs are saved beside main.py as run_semantic_fp_*. Stage console logs are in logs/. The candidate workers additionally write logs/teacher_kappa_1.0.log, teacher_kappa_1.5.log and teacher_kappa_2.0.log.
+Runs are beside main.py, named `run_semantic_fp_*`.
 
-- teacher_fp/calibration_target.json: frozen tau, sigma, counts/FPR, score/carrier hashes and all target scores.
-- teacher_fp/candidates/kappa_*/: protocol, losses.jsonl, checkpoint-*, final adapter, merged_pipeline, merge_test.json and validation.json.
-- images/candidate_kappa_*_validation/: native candidate images; compare identical file names with images/teacher_clean_validation/.
-- teacher_fp/candidates.json: campaign results; teacher_fp/selected.json: frozen selected teacher and gate outcome.
-- result/teacher_quality.json and teacher_quality.csv: teacher metrics; result/README.md, radioactivity.json, detection_semantic.csv, threshold files, utility.json and checkpoint_metrics.csv: original reports.
+- `carrier/`: versioned PCA, clean stability table, immutable32-bit key, all candidate-PC medians, provenance/hashes.
+- `teacher_fp/sign_protocol.json`: actual native scheduler and exact late IDs/alphas.
+- `teacher_fp/candidates/mu_*/`: protocol, losses/diagnostics, full checkpoints, merged pipeline, merge test and native validation results.
+- `teacher_fp/selected.json`: selected teacher and frozen policy; `teacher_fp/failure.json` explains an unsuccessful campaign.
+- `images/candidate_mu_*_validation/`: candidate images; compare same file names against `teacher_clean_validation/`.
+- `images/teacher_wm_test/`, `images/lora_r32_conv_wm/`, `images/full_wm/`, `images/unadapted/`: final test images.
+- `result/README.md`: primary analytic image/model evidence, secondary continuous detection/AUC and utility.
+- `result/analytic_verifier.json`: exact tail table, cutoff, null definition and tie rule.
+- `result/random_key_null_validation.json`, `fixed_key_clean_fpr.json`: clean checks, not key-selection tools.
+- `result/model_level_verification.json`, `query_budget.json`/CSV: K_M, exact p_M and deterministic query budgets10..1000.
+- `result/teacher_candidates/`: paired LPIPS/pixel/CLIP and saved clean/fingerprint/difference visual samples.
+- `scores/*.json`: centered coordinates, bits/matches, K, exact p_img, analytic detection, continuous score and image hashes.
+- `logs/`: persistent stage logs and isolated `teacher_coordinate_margin_mu_*.log` files.
 
-Every teacher loss step records scalar losses and latent/cycle score diagnostics, proxy TPRs, required shifts/cap fractions, semantic mask fraction, target score, gradient norm and peak allocated GPU memory. None of these diagnostics selects a student checkpoint.
-
-Before a candidate trains,12 isolated real-objective readiness updates exercise the mask boundaries, cycle path and optimizer. Parameters, PyTorch CPU/CUDA RNG and scratch optimizer effects are restored/discarded. A short probe does not certify every future batch. Runtime failure.json records precision, step, timesteps, microbatch losses and failing gradient boundary/parameters where available.
-
-Teacher state checkpoints default to every100 updates and the final update. They include trainable weights, AdamW, optional FP16 scaler, completed step, permutation/offset, data RNG and CPU/CUDA/Python RNG, with integrity hashes and loss-prefix hash. Checkpoint manifests are written last. Resume restores the latest complete state, archives post-checkpoint log entries and continues at the next step. Incomplete state folders are ignored; changed complete artifacts fail. The fixed teacher LR has no stateful LR scheduler. CPU tests compare resumed/uninterrupted model and AdamW states exactly; GPU/software differences can still change numerical results.
-
-The default clean teacher is the already pinned SD2.1 base mirror (Manojb/stable-diffusion-2-1-base revision0094d483a120f3f33dafbd187ea4aa60d10de75c); student is pinned CompVis/stable-diffusion-v1-4 revision133a221b8aa7292a167afc5127cb63fb5005638b. Existing clean snapshots are accepted through --teacher-snapshot/--student-snapshot as before. No HMARK, Serum grid, key-dependent generation input or runtime adapter is required for merged teacher generation.
-
-## Environment and verification
-
-Dependencies remain in Malicious_quantization/bitmark_lora/requirements-semantic.txt. Set up the server yourself; the shell file performs no setup. No model/GPU runs or downloads were performed locally.
-
-```bash
-python -m unittest discover -s Malicious_quantization/bitmark_lora -p 'test_semantic*.py'
-```
-
-Tests cover the original carrier/verifier/native generation/student isolation and the new CFG combination, threshold statistics/provenance, detached/clipped target, batch/bit normalization, cycle gradients, microbatch equivalence, candidate quality/TPR gate, selected-result resume, GPU-slot isolation and reuse without old adapters. The legacy Windows/POSIX and ZIP issues are recorded in docs/validation/semantic_threshold_cfg.md.
+Teacher remains the pinned SD2.1 base mirror and student pinned SD1.4. Environment setup is your responsibility; the launcher installs nothing. No real models, downloads or GPU runs are performed during local verification.

@@ -48,7 +48,7 @@ class ResumeTests(unittest.TestCase):
         from run import parse_args,config_from_args
         with tempfile.TemporaryDirectory() as d:
             source=Path(d)/'old';source.mkdir();dest=Path(d)/'new';dest.mkdir()
-            c=config_from_args(parse_args(['--train-n','4','--calibration-n','100','--validation-n','4',
+            c=config_from_args(parse_args(['--teacher-objective','threshold_cfg_v1','--train-n','4','--calibration-n','100','--validation-n','4',
                   '--validation-generation-n','2'],method='semantic_fp'))
             c.pop('teacher_precision');c.pop('teacher_objective');c.pop('teacher_kappas')
             c.update(semantic_shift=.5,semantic_shift_sweep=None,lambda_preserve=1.,lambda_code=.1,lambda_perp=.01,lambda_cycle=.05)
@@ -90,7 +90,7 @@ class ResumeTests(unittest.TestCase):
             self.assertEqual(sha256(source/'result/threshold_teacher.json'),sha256(dest/'result/threshold_teacher.json'))
             self.assertTrue((dest/'images/teacher_clean_train'/image_name(0)).exists())
             from semantic_checkpoint import reuse_preparation_config
-            fresh=config_from_args(parse_args([],method='semantic_fp'))
+            fresh=config_from_args(parse_args(['--teacher-objective','threshold_cfg_v1'],method='semantic_fp'))
             reused=reuse_preparation_config(fresh,source)
             self.assertEqual(reused['teacher_objective'],'threshold_cfg_v1')
             self.assertNotIn('continuation',reused)

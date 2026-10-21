@@ -319,6 +319,10 @@ def latest_teacher_adapters(run):
 
 def check_existing_run(run, precision='bf16', steps=32):
     """Diagnostic only: reuse old data/checkpoints without accepting changed resume hashes."""
+    from semantic_sign import is_sign
+    if is_sign(read_json(run/'config.json')):
+        from semantic_sign_train import check_sign_existing
+        return check_sign_existing(run,precision,steps)
     import datetime
     from diffusers import DDPMScheduler
     from semantic_teacher import extractor,pixels,numerical_policy
@@ -552,6 +556,10 @@ def choose_candidate(candidates):
 
 
 def train_candidates(run):
+    from semantic_sign import is_sign
+    if is_sign(read_json(run/'config.json')):
+        from semantic_sign_train import train_sign_candidates
+        return train_sign_candidates(run)
     from semantic_teacher import generate_set, score
     from semantic_report import detection_metrics, teacher_quality
     from semantic_assets import snapshot_identity

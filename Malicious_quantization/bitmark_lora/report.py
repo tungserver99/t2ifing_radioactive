@@ -38,6 +38,8 @@ def paired_ci(differences, seed=0, repeats=2000):
 
 
 def detector_value(row, convention):
+    if convention=='analytic_binomial':
+        return row['K']
     if convention.startswith(("serum_score", "semantic_score")):
         return row["score"]
     return abs(row["z_score"]) if convention == "absolute_z" else row["z_score"]

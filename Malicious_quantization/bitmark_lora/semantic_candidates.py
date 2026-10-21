@@ -29,21 +29,23 @@ def visible_slots():
     return slots[:count]
 
 
-def run_workers(run,values):
+def run_workers(run,values,parameter='kappa'):
+    if parameter not in ('kappa','coordinate_margin_mu'):raise ValueError('Unknown teacher candidate parameter')
+    flag='--kappa' if parameter=='kappa' else '--coordinate-margin-mu'
     slots=visible_slots()[:len(values)]
     print(f'Teacher candidates: {len(values)}; exclusive GPU slots: {slots}. '
           'One candidate per GPU; a single GPU executes candidates sequentially.',flush=True)
     def work(value,slot):
         env=os.environ.copy();env['CUDA_VISIBLE_DEVICES']=slot;env['PYTHONUNBUFFERED']='1'
-        log=run/'logs'/f'teacher_kappa_{value!r}.log';log.parent.mkdir(parents=True,exist_ok=True)
-        command=[sys.executable,str(HERE/'semantic_teacher.py'),'--run',str(run),'--stage','candidate','--kappa',str(value)]
+        log=run/'logs'/f'teacher_{parameter}_{value!r}.log';log.parent.mkdir(parents=True,exist_ok=True)
+        command=[sys.executable,str(HERE/'semantic_teacher.py'),'--run',str(run),'--stage','candidate',flag,str(value)]
         with log.open('a') as stream:
             process=subprocess.Popen(command,env=env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,bufsize=1)
             try:
                 for line in process.stdout:
-                    stream.write(line);stream.flush();print(f'[kappa={value}] {line}',end='',flush=True)
+                    stream.write(line);stream.flush();print(f'[{parameter}={value}] {line}',end='',flush=True)
                 code=process.wait()
-                if code:raise RuntimeError(f'Teacher kappa={value} failed (exit {code}); see {log}')
+                if code:raise RuntimeError(f'Teacher {parameter}={value} failed (exit {code}); see {log}')
             finally:
                 if process.poll() is None:process.terminate();process.wait()
                 process.stdout.close()

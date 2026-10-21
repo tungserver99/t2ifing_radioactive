@@ -134,6 +134,8 @@ def prepare_continuation(run,config):
     """Fork prep artifacts; immutable data uses hard links, with copy fallback."""
     from semantic_carrier import SemanticCarrier
     from semantic_report import freeze_null
+    if config.get('teacher_objective')=='semantic_sign_v1':
+        return prepare_sign_reuse(run,config)
     lineage=config.get('preparation_reuse') or config['continuation']
     source=Path(lineage['source']);run=Path(run)
     if sha256(source/'config.json')!=lineage['source_config_sha256']:
@@ -167,6 +169,15 @@ def reuse_preparation_config(config,source):
     if prior.get('watermark_method')!='semantic_fp':raise ValueError('Expected semantic_fp preparation source')
     if prior.get('teacher_batch',4)!=config['teacher_batch']:
         raise ValueError('Preparation generation batch differs from new teacher effective batch; use fresh preparation')
+    if config.get('teacher_objective')=='semantic_sign_v1':
+        fields=('seed','key_seed','train_n','validation_n','calibration_n','test_n','fpr',
+                'teacher_snapshot','student_snapshot','cache','inference_steps','score_batch')
+        result={**config,**{k:prior[k] for k in fields if k in prior},
+                'preparation_reuse':{'source':str(source),'source_config_sha256':sha256(source/'config.json'),
+                                     'mode':'verified clean images/prompts only; rebuild 32-bit carrier/key/medians/scores; clean SD2.1 teacher initialization'}}
+        if result['inference_steps']!=config['inference_steps']:raise ValueError('Clean preparation inference schedule differs from RSSF configuration')
+        if prior.get('carrier_pc_min',8)!=8 or prior.get('carrier_pc_max',64)!=64:raise ValueError('Clean preparation must use the same carrier PC range')
+        return result
     # These define the actual reused clean data, carrier, key and null.
     fields=('seed','key_seed','num_bits','carrier_pc_min','carrier_pc_max','stable_candidate_count',
             'train_n','validation_n','calibration_n','test_n','fpr','teacher_snapshot','student_snapshot',
@@ -177,3 +188,38 @@ def reuse_preparation_config(config,source):
     if result['fpr']!=.01:raise ValueError('Threshold objective requires the clean 1%-FPR calibration')
     if result['num_bits']!=8:raise ValueError('Threshold rescue protocol requires the existing 8-bit carrier')
     return result
+
+
+
+def prepare_sign_reuse(run,config):
+    """Only immutable clean images/prompts/assets; old keys, scores and weights never copied."""
+    from common import image_name
+    source=Path(config['preparation_reuse']['source']);run=Path(run)
+    if sha256(source/'config.json')!=config['preparation_reuse']['source_config_sha256']:
+        raise RuntimeError('RSSF preparation source config changed')
+    def copy_file(src,dst):
+        src,dst=Path(src),Path(dst)
+        if dst.exists():
+            if sha256(src)!=sha256(dst):raise RuntimeError(f'RSSF reused clean artifact changed: {dst}')
+            return str(dst)
+        dst.parent.mkdir(parents=True,exist_ok=True)
+        try:os.link(src,dst)
+        except OSError:shutil.copy2(src,dst)
+        return str(dst)
+    for name in ('assets.json','prompts.json','images/teacher_clean_train','images/teacher_clean_validation','images/teacher_clean_calibration'):
+        src=source/name;dst=run/name
+        if src.is_dir():shutil.copytree(src,dst,copy_function=copy_file,dirs_exist_ok=True)
+        else:copy_file(src,dst)
+    assets=read_json(run/'assets.json');prompts=read_json(run/'prompts.json')
+    if sha256(run/'prompts.json')!=assets['prompt_sha256']:raise RuntimeError('RSSF reused prompt hash changed')
+    for split in ('train','validation','calibration'):
+        directory=run/'images'/f'teacher_clean_{split}'
+        expected=read_json(directory/'image_hashes.json');rows=prompts[split]
+        if len(expected)!=len(rows) or len(rows)!=config[split+'_n']:
+            raise RuntimeError('RSSF reused clean image count mismatch')
+        if [r['file_name'] for r in expected]!=[image_name(i) for i in range(len(rows))]:raise RuntimeError('RSSF reused clean image ordering changed')
+        if any(sha256(directory/r['file_name'])!=r['sha256'] for r in expected):raise RuntimeError('RSSF reused clean image changed')
+        generation=read_json(directory/'generation.json')
+        if generation['cfg']!=7.5 or generation['resolution']!=512 or generation['steps']!=config['inference_steps']:
+            raise RuntimeError('RSSF reused preprocessing/generation schedule mismatch')
+    write_json(run/'preparation_reuse.json',config['preparation_reuse'])

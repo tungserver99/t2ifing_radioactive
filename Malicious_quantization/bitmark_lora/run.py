@@ -71,17 +71,27 @@ def parse_args(argv=None, method="bitmark"):
     if method == "semantic_fp":
         p.description = "Native semantic SD2.1 fingerprint -> ordinary SD1.4 adaptation"
         p.set_defaults(train_n=5000, validation_n=1000, batch_size=8, learning_rate=1e-5)
-        p.set_defaults(teacher_objective="threshold_cfg_v1",cycle_every=1)
+        p.set_defaults(cycle_every=1)
+        p.add_argument('--teacher-objective',choices=['semantic_sign_v1','threshold_cfg_v1'],default='semantic_sign_v1')
+        p.add_argument('--coordinate-margin-mu-candidates',type=float,nargs='+',default=[.1,.2,.3])
+        p.add_argument('--analytic-alpha',type=float,default=.01)
+        p.add_argument('--train-bit-count-margin',type=int,default=2)
+        p.add_argument('--late-inference-step-count',type=int,default=5)
+        p.add_argument('--lambda-fp',type=float,default=.8)
+        p.add_argument('--lambda-quality',type=float,default=1.)
+        p.add_argument('--lambda-lpips',type=float,default=1.)
+        p.add_argument('--lambda-pixel',type=float,default=1.)
+        p.add_argument('--teacher-min-analytic-tpr',type=float,default=.9)
         p.add_argument("--teacher-kappas",type=float,nargs="+",default=[1.,1.5,2.])
         p.add_argument("--reuse-preparation",type=Path,help="Reuse verified clean images/carrier/calibration; train new teachers from clean weights")
         p.add_argument("--setting", choices=["pilot", "full"], default="pilot")
         p.add_argument("--teacher-snapshot", type=Path, help="Optional existing clean SD2.1 standard pipeline snapshot")
         p.add_argument("--student-snapshot", type=Path, help="Optional existing pinned SD1.4 standard pipeline snapshot")
         p.add_argument("--key-seed", type=int, default=0)
-        p.add_argument("--num-bits", type=int, default=8)
+        p.add_argument("--num-bits", type=int, default=32)
         p.add_argument("--carrier-pc-min", type=int, default=8, help="Zero-based inclusive")
         p.add_argument("--carrier-pc-max", type=int, default=64, help="Zero-based inclusive")
-        p.add_argument("--stable-candidate-count", type=int, default=16)
+        p.add_argument("--stable-candidate-count", type=int, default=48)
         p.add_argument("--semantic-shift", type=float, default=.5, help=argparse.SUPPRESS)
         p.add_argument("--semantic-shift-sweep", type=float, nargs="+", help=argparse.SUPPRESS)
         p.add_argument("--semantic-t-max", type=int, default=500)
@@ -97,7 +107,7 @@ def parse_args(argv=None, method="bitmark"):
         p.add_argument("--teacher-batch", type=int, default=4)
         p.add_argument("--score-batch", type=int, default=4)
         p.add_argument("--cycle-every", type=int, default=1)
-        p.add_argument("--lambda-preserve", type=float, default=1., help=argparse.SUPPRESS)
+        p.add_argument("--lambda-preserve", type=float, default=1., help="RSSF full-range preservation weight")
         p.add_argument("--lambda-code", type=float, default=.10, help=argparse.SUPPRESS)
         p.add_argument("--lambda-perp", type=float, default=.01, help=argparse.SUPPRESS)
         p.add_argument("--lambda-cycle", type=float, default=.05, help=argparse.SUPPRESS)
@@ -110,12 +120,32 @@ def parse_args(argv=None, method="bitmark"):
         supplied = list(argv if argv is not None else sys.argv[1:])
         flags = {v.split("=")[0] for v in supplied if v.startswith("--")}
         inactive={'--semantic-shift','--semantic-shift-sweep','--lambda-preserve','--lambda-code','--lambda-perp','--lambda-cycle'}
-        if flags & inactive:p.error('Fixed-alpha/perpendicular/old cycle weights are inactive; use --teacher-kappas')
+        if a.teacher_objective=='threshold_cfg_v1':
+            if '--num-bits' not in flags:a.num_bits=8
+            if '--stable-candidate-count' not in flags:a.stable_candidate_count=16
+        if a.teacher_objective=='semantic_sign_v1':
+            inactive.discard('--lambda-preserve')
+            inactive.update({'--teacher-kappas','--semantic-t-max','--cycle-every','--teacher-min-tpr'})
+        else:
+            inactive.update({'--coordinate-margin-mu-candidates','--analytic-alpha','--train-bit-count-margin',
+                             '--late-inference-step-count','--lambda-fp','--lambda-quality','--lambda-lpips','--lambda-pixel','--teacher-min-analytic-tpr'})
+        if flags & inactive:p.error('Supplied flags are inactive for the selected teacher objective')
         if a.fpr!=.01:p.error('Threshold rescue protocol uses the frozen 1%-FPR operating point')
-        if a.num_bits!=8:p.error('Threshold rescue protocol retains the 8-bit carrier')
+        if a.teacher_objective=='threshold_cfg_v1' and a.num_bits!=8:p.error('Threshold rescue protocol retains the 8-bit carrier')
         if a.cycle_every!=1:p.error('Threshold objective applies cycle at every semantic update (--cycle-every 1)')
         if a.teacher_clip_drop_max>.01:p.error('Threshold teacher CLIP drop hard limit cannot exceed 0.01')
         if a.teacher_min_tpr<.9:p.error('Threshold teacher validation TPR must be at least 0.90')
+        if a.teacher_objective=='semantic_sign_v1':
+            if (a.num_bits!=32 or a.stable_candidate_count!=48 or (a.carrier_pc_min,a.carrier_pc_max)!=(8,64)):
+                p.error('First RSSF campaign uses 32 bits from the stable top48 PCs in 8..64')
+            if a.coordinate_margin_mu_candidates!=[.1,.2,.3]:p.error('First RSSF campaign uses exactly mu=[0.10,0.20,0.30]')
+            if not 0<a.analytic_alpha<1 or a.train_bit_count_margin<0 or a.late_inference_step_count<1:
+                p.error('Invalid RSSF analytic alpha/count margin/late timestep count')
+            if a.teacher_lpips_max>.15 or a.teacher_min_analytic_tpr<.9:
+                p.error('RSSF gates cannot be relaxed: LPIPS<=.15 and analytic TPR>=.90')
+            if any(not math.isfinite(v) or v<0 for v in [a.lambda_fp,a.lambda_quality,a.lambda_lpips,a.lambda_pixel]):
+                p.error('RSSF loss weights must be finite and nonnegative')
+            if not math.isfinite(a.teacher_min_analytic_tpr) or a.teacher_min_analytic_tpr>1:p.error('Invalid analytic teacher TPR gate')
         if a.setting == "pilot":
             if "--ranks" not in flags: a.ranks = [32]
             if "--adapter-scopes" not in flags: a.adapter_scopes = ["attention_conv"]
@@ -180,6 +210,14 @@ def config_from_args(a):
     config = {k: str(v.resolve()) if isinstance(v, Path) else v for k, v in vars(a).items() if k not in ignored}
     if config.get('teacher_objective')=='threshold_cfg_v1':
         for name in ('semantic_shift','semantic_shift_sweep','lambda_preserve','lambda_code','lambda_perp','lambda_cycle'):
+            config.pop(name,None)
+    if config.get('teacher_objective')=='semantic_sign_v1':
+        for name in ('semantic_shift','semantic_shift_sweep','lambda_code','lambda_perp','lambda_cycle',
+                     'teacher_kappas','semantic_t_max','cycle_every','teacher_min_tpr'):
+            config.pop(name,None)
+    elif config.get('watermark_method')=='semantic_fp':
+        for name in ('coordinate_margin_mu_candidates','analytic_alpha','train_bit_count_margin','late_inference_step_count',
+                     'lambda_fp','lambda_quality','lambda_lpips','lambda_pixel','teacher_min_analytic_tpr'):
             config.pop(name,None)
     return config
 
@@ -308,11 +346,14 @@ def main(argv=None, method="bitmark"):
     if getattr(a,'continue_from',None):
         if a.resume or a.analyze:raise ValueError('--continue-from creates a new run; cannot accompany resume/analyze')
         supplied=argv if argv is not None else sys.argv[1:]
-        allowed={'--continue-from','--teacher-precision','--output','--min-free-gb','--plan-only'}
+        allowed={'--continue-from','--teacher-objective','--teacher-precision','--output','--min-free-gb','--plan-only'}
         if any(x.split('=')[0] not in allowed for x in supplied if x.startswith('--')):
             raise ValueError('--continue-from preserves the source experiment; only teacher precision/output/disk/plan overrides are allowed')
         from semantic_checkpoint import continuation_config
         c=continuation_config(a.continue_from,a.teacher_precision)
+        if c.get('teacher_objective')=='semantic_sign_v1':raise ValueError('RSSF does not warm-start teachers; use --resume or reuse clean preparation')
+        if any(v.split('=')[0]=='--teacher-objective' for v in supplied) and a.teacher_objective!=c.get('teacher_objective'):
+            raise ValueError('Continuation objective must match its historical source')
         a.cache=Path(c['cache'])
     if getattr(a,'reuse_preparation',None):
         supplied=argv if argv is not None else sys.argv[1:]
@@ -347,7 +388,7 @@ def main(argv=None, method="bitmark"):
             "student_selection": "minimum held-out denoising MSE; earlier step wins ties",
             "generation": "ordinary Gaussian generators; no key, custom latents or postprocessor",
             "teacher_objective": c.get('teacher_objective','fixed_shift_v1'),
-            "teacher_loss": "preserve + 0.8*(mean semantic shift error + 0.5*mean cycle shift error)" if c.get('teacher_objective')=='threshold_cfg_v1' else "historical fixed shift",
+            "teacher_loss": "preserve + 0.8*(mean semantic shift error + 0.5*mean cycle shift error)" if c.get('teacher_objective')=='threshold_cfg_v1' else "preserve + 0.8*decoded-image easiest-bit hinge + LPIPS/pixel quality" if c.get('teacher_objective')=='semantic_sign_v1' else "historical fixed shift",
             "candidate_scheduling": "one isolated process per visible GPU; sequential on one GPU",
             "execute": "bash run_semantic_fp.sh", "gpu_work": False, "results_root": str(results_root(carrier))}, indent=2))
         return
@@ -390,6 +431,8 @@ def main(argv=None, method="bitmark"):
             for name in ("main.py", "run_semantic_fp.sh", "native_semantic_radioactive_fingerprint_codex_spec.md", "docs/threshold_cfg_v1.md"):
                 source_files["../../" + name] = sha256(project_root / name)
             source_files["requirements-semantic.txt"] = sha256(HERE / "requirements-semantic.txt")
+            if c.get('teacher_objective')=='semantic_sign_v1':
+                source_files['../../semantic_sign_fingerprint_codex_spec.md']=sha256(project_root/'semantic_sign_fingerprint_codex_spec.md')
         if a.upgrade_execution:
             from semantic_execution import upgrade_execution_manifest
             upgrade_execution_manifest(run, source_files)
@@ -408,10 +451,12 @@ def main(argv=None, method="bitmark"):
             stage(run, label, [py, str(HERE / file), "--run", str(run), *args])
         call(assets_file, "01_assets")
         if carrier == "semantic_fp":
-            if not (c.get('continuation') or c.get('preparation_reuse')):
+            if c.get('teacher_objective')=='semantic_sign_v1' or not (c.get('continuation') or c.get('preparation_reuse')):
                 call(teacher_file, "01a_clean_teacher", "--stage", "clean")
                 call(teacher_file, "01b_carrier", "--stage", "carrier")
-                call(teacher_file, "01c_clean_calibration", "--stage", "score", "--directories", "teacher_clean_calibration")
+                clean_score_labels=['teacher_clean_calibration']
+                if c.get('teacher_objective')=='semantic_sign_v1':clean_score_labels.append('teacher_clean_validation')
+                call(teacher_file, "01c_clean_calibration", "--stage", "score", "--directories", *clean_score_labels)
                 call("semantic_report.py", "01d_teacher_null", "--teacher-null-only")
             else:
                 from semantic_report import freeze_null

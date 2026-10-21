@@ -6,6 +6,7 @@ import torch
 from common import finite, freeze, image_name, read_json, sha256, write_json
 from semantic_carrier import SemanticCarrier, check_finite
 from semantic_threshold import quality_passes,is_threshold,clip_drop_limit
+from semantic_sign import is_sign
 
 
 def score_rows(run,label,n,carrier=None):
@@ -24,6 +25,15 @@ def score_rows(run,label,n,carrier=None):
         raise ValueError('Score does not match saved semantic coordinates and frozen key')
     for r in rows:
         if sha256(run/'images'/label/r['file'])!=r['sha256']: raise RuntimeError('Scored image changed')
+    if is_sign(read_json(run/'config.json')):
+        from semantic_sign_report import validate_image_evidence
+        c=read_json(run/'config.json')
+        provenance=read_json(run/'scores'/f'{label}.provenance.json')
+        expected={'carrier_sha256':sha256(run/'carrier/complete.json'),
+                  'prompt_sha256':sha256(run/'prompts.json'),'reference_assets_sha256':sha256(run/'assets.json'),
+                  'batch_size':c['score_batch'],'dtype':'float32','probe_timestep':0,'posterior':'mean'}
+        if provenance!=expected: raise RuntimeError('Semantic sign score provenance changed')
+        validate_image_evidence(rows,carrier,c.get('analytic_alpha',c.get('alpha_test',.01)))
     return rows
 
 
@@ -46,6 +56,11 @@ def freeze_thresholds(run):
     result={'primary':'semantic_score','semantic_score':student['threshold'],
             'semantic_score_teacher':teacher['threshold'],'semantic_score_student':student['threshold'],
             'teacher':teacher,'student':student,'note':'Identical fixed semantic score; separate clean family nulls'}
+    if is_sign(read_json(run/'config.json')):
+        from semantic_sign import detection_count
+        c=read_json(run/'config.json')
+        result.update(primary='analytic_binomial',analytic_binomial=detection_count(c['num_bits'],c['analytic_alpha']),role='secondary_continuous_comparison',
+                      note='Disjoint clean calibration for secondary continuous scores only; analytic verifier is primary')
     freeze(run/'result/threshold.json',result)
     return result
 
@@ -67,6 +82,7 @@ def teacher_quality(run,label):
     from utility import CLIP_REV
     from semantic_teacher import pixels
     c=read_json(run/'config.json'); rows=read_json(run/'prompts.json')['validation']
+    sign_objective=is_sign(c)
     clean=run/'images/teacher_clean_validation'; fp=run/'images'/label
     identity={'clean':[sha256(clean/image_name(i)) for i in range(len(rows))],
               'fingerprinted':[sha256(fp/image_name(i)) for i in range(len(rows))],
@@ -74,6 +90,9 @@ def teacher_quality(run,label):
               'lpips_max':c['teacher_lpips_max'],'pairing':'identical prompt and Gaussian seed',
               'lpips':'alex, version=0.1, lpips package 0.1.4',
               'quality_policy':'clip_only_lpips_diagnostic' if is_threshold(c) else 'clip_and_lpips'}
+    if sign_objective:
+        identity.update(clip_drop_max=.01,lpips_max=.15,quality_policy='rssf_clip_lpips_hard_gates',
+                        pixel_mse_range='[-1,1]',visual_sample_count=min(8,len(rows)))
     cg=read_json(clean/'generation.json'); fg=read_json(fp/'generation.json')
     if cg['seeds']!=fg['seeds'] or cg['prompts_sha256']!=fg['prompts_sha256']:
         raise ValueError('Teacher quality requires paired prompts and seeds')
@@ -108,11 +127,19 @@ def teacher_quality(run,label):
             'lpips_is_hard_gate':not is_threshold(c),
             'clip_definition':'same Serum utility: 2.5 * max(cos(image,text),0)',
             'clip_per_image_clean':clips[0],'clip_per_image_fp':clips[1],'lpips_per_image':distances}
+    if sign_objective:
+        from semantic_sign_report import paired_pixel_visuals
+        result.update(paired_pixel_visuals(run,'teacher_clean_validation',label,len(rows)))
+        result.update(passes=math.isfinite(clean_clip-fp_clip) and math.isfinite(lp) and
+                      clean_clip-fp_clip<=.01 and lp<=.15,lpips_is_hard_gate=True)
     freeze(target,result)
     return result
 
 
 def summarize(run):
+    if is_sign(read_json(run/'config.json')):
+        from semantic_sign_report import summarize as sign_summary
+        return sign_summary(run)
     from student import branches
     c=read_json(run/'config.json'); threshold=freeze_thresholds(run)
     labels=['teacher_clean_test','teacher_wm_test','unadapted']+[b['name'] for b in branches(c)]

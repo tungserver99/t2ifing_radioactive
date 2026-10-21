@@ -203,7 +203,7 @@ class ThresholdObjectiveTests(unittest.TestCase):
     def test_new_cli_plan_and_student_protocol_unchanged(self):
         from run import parse_args,config_from_args
         from student import branches,training_command
-        c=config_from_args(parse_args([],method='semantic_fp'))
+        c=config_from_args(parse_args(['--teacher-objective','threshold_cfg_v1'],method='semantic_fp'))
         self.assertEqual(c['teacher_objective'],'threshold_cfg_v1')
         self.assertEqual(c['teacher_kappas'],[1.,1.5,2.])
         self.assertEqual((c['teacher_batch'],c['teacher_micro_batch'],c['teacher_train_steps']),(4,1,3000))

@@ -175,6 +175,10 @@ def score(run,directories):
                 r=(q*carrier.signs).mean(-1); check_finite(r,q)
             values += [{'file':p.name,'sha256':sha256(p),'score':s,'coordinates':coords}
                        for p,s,coords in zip(batch,r.cpu().tolist(),q.cpu().tolist())]
+        from semantic_sign import is_sign,image_evidence
+        if is_sign(c):
+            evidence=image_evidence(torch.tensor([row['coordinates'] for row in values]),carrier.signs.cpu(),c['analytic_alpha'])
+            values=[{**row,**ev} for row,ev in zip(values,evidence)]
         freeze(out,values)
 
 
@@ -196,14 +200,21 @@ if __name__ == '__main__':
     p=argparse.ArgumentParser(); p.add_argument('--run',type=Path,required=True)
     p.add_argument('--stage',choices=['clean','carrier','train','candidate','generate','score'],required=True)
     p.add_argument('--kappa',type=float)
+    p.add_argument('--coordinate-margin-mu',type=float)
     p.add_argument('--directories',nargs='+'); a=p.parse_args(); run=a.run.resolve()
     if a.stage=='score':
         if not a.directories: p.error('--directories is required')
         score(run,a.directories)
     elif a.stage=='candidate':
-        if a.kappa is None:p.error('--kappa is required for candidate stage')
-        from semantic_teacher_train import train_threshold_candidate
-        train_threshold_candidate(run,a.kappa)
+        from semantic_sign import is_sign
+        if is_sign(read_json(run/'config.json')):
+            if a.coordinate_margin_mu is None or a.kappa is not None:p.error('--coordinate-margin-mu is required for RSSF candidate')
+            from semantic_sign_train import train_sign_candidate
+            train_sign_candidate(run,a.coordinate_margin_mu)
+        else:
+            if a.kappa is None or a.coordinate_margin_mu is not None:p.error('--kappa is required for threshold candidate')
+            from semantic_teacher_train import train_threshold_candidate
+            train_threshold_candidate(run,a.kappa)
     elif a.stage=='clean': clean_prepare(run)
     elif a.stage=='carrier': carrier_stage(run)
     elif a.stage=='generate': generate(run)
