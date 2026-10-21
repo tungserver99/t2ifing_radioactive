@@ -100,14 +100,14 @@ class SignReportTests(unittest.TestCase):
    def __call__(self,**kwargs):return Batch(images=kwargs['images'])
   class LPIPS(Frozen):
    def __init__(self,*args,**kwargs):pass
-   def __call__(self,a,b):return torch.full((len(a),1,1,1),.2)
+   def __call__(self,a,b):return torch.full((len(a),1,1,1),self.value)
   modules={'transformers':SimpleNamespace(CLIPModel=Clip,CLIPProcessor=Processor),
            'lpips':SimpleNamespace(LPIPS=LPIPS),'utility':SimpleNamespace(CLIP_REV='fixture'),
            'semantic_teacher':SimpleNamespace(pixels=lambda paths:torch.zeros(len(paths),3,4,4))}
   with tempfile.TemporaryDirectory() as tmp,patch.dict('sys.modules',modules):
-   for objective in ('semantic_sign_v1','threshold_cfg_v1'):
-    run=Path(tmp)/objective
-    write_json(run/'config.json',{'teacher_objective':objective,'teacher_clip_drop_max':.01,'teacher_lpips_max':9.,'score_batch':1})
+   for objective,limit,value in (('semantic_sign_v1',9.,.2),('threshold_cfg_v1',9.,.2),('semantic_sign_v1',.1,.12)):
+    run=Path(tmp)/(objective+str(limit));LPIPS.value=value
+    write_json(run/'config.json',{'teacher_objective':objective,'teacher_clip_drop_max':.01,'teacher_lpips_max':limit,'score_batch':1})
     write_json(run/'prompts.json',{'validation':[{'text':'paired fixture'}]})
     for label in ('teacher_clean_validation','candidate'):
      d=run/'images'/label;d.mkdir(parents=True);Image.new('RGB',(4,4),'white').save(d/image_name(0))
@@ -115,7 +115,7 @@ class SignReportTests(unittest.TestCase):
     a=semantic_report.teacher_quality(run,'candidate');self.assertEqual(a,semantic_report.teacher_quality(run,'candidate'))
     if objective=='semantic_sign_v1':
      self.assertFalse(a['passes']);self.assertEqual(a['paired_pixel_mse'],0.)
-     self.assertEqual(a['identity']['lpips_max'],.15);self.assertTrue(a['visual_comparisons'])
+     self.assertEqual(a['identity']['lpips_max'],min(.15,limit));self.assertTrue(a['visual_comparisons'])
     else:
      self.assertTrue(a['passes']);self.assertNotIn('paired_pixel_mse',a)
      self.assertNotIn('pixel_mse_range',a['identity'])

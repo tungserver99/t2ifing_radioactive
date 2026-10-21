@@ -116,8 +116,14 @@ def sign_schedule(run,c,training_scheduler):
     assets=read_json(run/'assets.json');model=Path(assets['teacher_clean'])
     library,classname=read_json(model/'model_index.json')['scheduler']
     if library!='diffusers':raise ValueError('Native scheduler must be the saved Diffusers scheduler')
-    cls=getattr(importlib.import_module('diffusers'),classname)
+    diffusers=importlib.import_module('diffusers')
+    cls=getattr(diffusers,classname)
     native=cls.from_pretrained(model,subfolder='scheduler',local_files_only=True)
+    # Use the installed native pipeline's own scheduler normalization (not a
+    # second handwritten policy). No model components/weights are constructed.
+    native=diffusers.StableDiffusionPipeline(
+        vae=None,text_encoder=None,tokenizer=None,unet=None,scheduler=native,
+        safety_checker=None,feature_extractor=None,requires_safety_checker=False).scheduler
     late=derive_late_timesteps(native,training_scheduler,c['inference_steps'],c['late_inference_step_count'])
     protocol={'objective':'semantic_sign_v1','native_scheduler':classname,'training_scheduler':type(training_scheduler).__name__,
               'scheduler_config_sha256':sha256(model/'scheduler/scheduler_config.json'),

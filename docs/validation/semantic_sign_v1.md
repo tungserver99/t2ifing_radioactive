@@ -18,7 +18,7 @@ The pinned SD2.1 mirror metadata at revision0094d483a120f3f33dafbd187ea4aa60d10d
 
 Runtime derives the exact last5 unique integer IDs from that actual scheduler's set_timesteps(50), verifies alpha compatibility with the training DDPM schedule and freezes IDs/alphas/class/config hashes. No timestep cutoff or assumed linear spacing is hard-coded. Unsupported fractional or incompatible schedules fail clearly.
 
-## Verification
+## Verification at initial RSSF commit24f4f3b
 
 Python: D:/anaconda3/envs/topmost/python.exe. CPU-only synthetic models/fixtures, no installs or model downloads.
 
@@ -38,3 +38,5 @@ bash run_semantic_fp.sh --reuse-preparation run_semantic_fp_20261020_135117_0097
 ```
 
 This starts a fresh RSSF run using verified old clean data. Do not --resume an old threshold teacher to change objectives. New interrupted RSSF runs use strict --resume THEIR_RUN with unchanged code/config/environment.
+
+A subsequent locked-spec re-audit found and fixed two edge cases (native scheduler normalization for local snapshots and stricter quality-report gates). See [the audit record](semantic_sign_spec_audit.md) for findings and fresh91-test evidence.

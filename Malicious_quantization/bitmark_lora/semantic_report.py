@@ -91,7 +91,7 @@ def teacher_quality(run,label):
               'lpips':'alex, version=0.1, lpips package 0.1.4',
               'quality_policy':'clip_only_lpips_diagnostic' if is_threshold(c) else 'clip_and_lpips'}
     if sign_objective:
-        identity.update(clip_drop_max=.01,lpips_max=.15,quality_policy='rssf_clip_lpips_hard_gates',
+        identity.update(clip_drop_max=min(.01,c['teacher_clip_drop_max']),lpips_max=min(.15,c['teacher_lpips_max']),quality_policy='rssf_clip_lpips_hard_gates',
                         pixel_mse_range='[-1,1]',visual_sample_count=min(8,len(rows)))
     cg=read_json(clean/'generation.json'); fg=read_json(fp/'generation.json')
     if cg['seeds']!=fg['seeds'] or cg['prompts_sha256']!=fg['prompts_sha256']:
@@ -131,7 +131,7 @@ def teacher_quality(run,label):
         from semantic_sign_report import paired_pixel_visuals
         result.update(paired_pixel_visuals(run,'teacher_clean_validation',label,len(rows)))
         result.update(passes=math.isfinite(clean_clip-fp_clip) and math.isfinite(lp) and
-                      clean_clip-fp_clip<=.01 and lp<=.15,lpips_is_hard_gate=True)
+                      clean_clip-fp_clip<=identity['clip_drop_max'] and lp<=identity['lpips_max'],lpips_is_hard_gate=True)
     freeze(target,result)
     return result
 
