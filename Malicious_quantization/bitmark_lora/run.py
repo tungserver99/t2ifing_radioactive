@@ -72,7 +72,15 @@ def parse_args(argv=None, method="bitmark"):
         p.description = "Native semantic SD2.1 fingerprint -> ordinary SD1.4 adaptation"
         p.set_defaults(train_n=5000, validation_n=1000, batch_size=8, learning_rate=1e-5)
         p.set_defaults(cycle_every=1)
-        p.add_argument('--teacher-objective',choices=['semantic_sign_v1','threshold_cfg_v1'],default='semantic_sign_v1')
+        p.add_argument('--teacher-objective',choices=['semantic_sign_v1','semantic_sign_v2_trajectory','threshold_cfg_v1'],default='semantic_sign_v1')
+        p.add_argument('--teacher-only',action='store_true')
+        p.add_argument('--coordinate-margin-mu',type=float,default=.10)
+        p.add_argument('--tail-unroll-calls',type=int,default=4)
+        p.add_argument('--trajectory-anchor-count',type=int,default=5)
+        p.add_argument('--trajectory-shard-size',type=int,default=64)
+        p.add_argument('--teacher-eval-checkpoints',type=int,nargs='+',default=[100,250,500,750,1000,1500])
+        p.add_argument('--teacher-eval-n',type=int,default=128)
+        p.add_argument('--trajectory-drift-n',type=int,default=16)
         p.add_argument('--coordinate-margin-mu-candidates',type=float,nargs='+',default=[.1,.2,.3])
         p.add_argument('--analytic-alpha',type=float,default=.01)
         p.add_argument('--train-bit-count-margin',type=int,default=2)
@@ -123,7 +131,7 @@ def parse_args(argv=None, method="bitmark"):
         if a.teacher_objective=='threshold_cfg_v1':
             if '--num-bits' not in flags:a.num_bits=8
             if '--stable-candidate-count' not in flags:a.stable_candidate_count=16
-        if a.teacher_objective=='semantic_sign_v1':
+        if a.teacher_objective in {'semantic_sign_v1','semantic_sign_v2_trajectory'}:
             inactive.discard('--lambda-preserve')
             inactive.update({'--teacher-kappas','--semantic-t-max','--cycle-every','--teacher-min-tpr'})
         else:
@@ -135,10 +143,10 @@ def parse_args(argv=None, method="bitmark"):
         if a.cycle_every!=1:p.error('Threshold objective applies cycle at every semantic update (--cycle-every 1)')
         if a.teacher_clip_drop_max>.01:p.error('Threshold teacher CLIP drop hard limit cannot exceed 0.01')
         if a.teacher_min_tpr<.9:p.error('Threshold teacher validation TPR must be at least 0.90')
-        if a.teacher_objective=='semantic_sign_v1':
+        if a.teacher_objective in {'semantic_sign_v1','semantic_sign_v2_trajectory'}:
             if (a.num_bits!=32 or a.stable_candidate_count!=48 or (a.carrier_pc_min,a.carrier_pc_max)!=(8,64)):
                 p.error('First RSSF campaign uses 32 bits from the stable top48 PCs in 8..64')
-            if a.coordinate_margin_mu_candidates!=[.1,.2,.3]:p.error('First RSSF campaign uses exactly mu=[0.10,0.20,0.30]')
+            if a.teacher_objective=='semantic_sign_v1' and a.coordinate_margin_mu_candidates!=[.1,.2,.3]:p.error('First RSSF campaign uses exactly mu=[0.10,0.20,0.30]')
             if not 0<a.analytic_alpha<1 or a.train_bit_count_margin<0 or a.late_inference_step_count<1:
                 p.error('Invalid RSSF analytic alpha/count margin/late timestep count')
             if a.teacher_lpips_max>.15 or a.teacher_min_analytic_tpr<.9:
@@ -146,6 +154,24 @@ def parse_args(argv=None, method="bitmark"):
             if any(not math.isfinite(v) or v<0 for v in [a.lambda_fp,a.lambda_quality,a.lambda_lpips,a.lambda_pixel]):
                 p.error('RSSF loss weights must be finite and nonnegative')
             if not math.isfinite(a.teacher_min_analytic_tpr) or a.teacher_min_analytic_tpr>1:p.error('Invalid analytic teacher TPR gate')
+        if a.teacher_objective=='semantic_sign_v2_trajectory':
+            if not a.teacher_only:p.error('Trajectory rescue requires --teacher-only')
+            if flags & {'--coordinate-margin-mu-candidates','--late-inference-step-count','--continue-from','--reuse-preparation','--skip-utility','--teacher-check'}:
+                p.error('Trajectory rescue requires a fresh traced campaign or exact --resume; no sweeps/proxy objectives')
+            locked={'train_n':5000,'validation_n':512,'calibration_n':1000,'teacher_train_steps':1500,
+                    'train_bit_count_margin':0,'key_seed':0,'analytic_alpha':.01,'coordinate_margin_mu':.10,
+                    'tail_unroll_calls':4,'trajectory_anchor_count':5,'trajectory_shard_size':64,
+                    'teacher_eval_checkpoints':[100,250,500,750,1000,1500],'teacher_eval_n':128,'trajectory_drift_n':16,
+                    'teacher_rank':32,'teacher_lr':1e-4,'teacher_batch':4,'teacher_micro_batch':1,
+                    'teacher_precision':'bf16','teacher_checkpoint_every':100,'inference_steps':50,
+                    'lambda_preserve':1.,'lambda_fp':.8,'lambda_quality':1.,'lambda_lpips':1.,'lambda_pixel':1.,
+                    'teacher_min_analytic_tpr':.9,'teacher_clip_drop_max':.01,'teacher_lpips_max':.15}
+            for name,value in locked.items():
+                flag='--'+name.replace('_','-')
+                if flag in flags and getattr(a,name)!=value:p.error(f'Locked v2 protocol requires {flag}={value}')
+                setattr(a,name,value)
+        elif a.teacher_only:
+            p.error('--teacher-only currently requires semantic_sign_v2_trajectory')
         if a.setting == "pilot":
             if "--ranks" not in flags: a.ranks = [32]
             if "--adapter-scopes" not in flags: a.adapter_scopes = ["attention_conv"]
@@ -211,7 +237,7 @@ def config_from_args(a):
     if config.get('teacher_objective')=='threshold_cfg_v1':
         for name in ('semantic_shift','semantic_shift_sweep','lambda_preserve','lambda_code','lambda_perp','lambda_cycle'):
             config.pop(name,None)
-    if config.get('teacher_objective')=='semantic_sign_v1':
+    if config.get('teacher_objective') in {'semantic_sign_v1','semantic_sign_v2_trajectory'}:
         for name in ('semantic_shift','semantic_shift_sweep','lambda_code','lambda_perp','lambda_cycle',
                      'teacher_kappas','semantic_t_max','cycle_every','teacher_min_tpr'):
             config.pop(name,None)
@@ -219,6 +245,12 @@ def config_from_args(a):
         for name in ('coordinate_margin_mu_candidates','analytic_alpha','train_bit_count_margin','late_inference_step_count',
                      'lambda_fp','lambda_quality','lambda_lpips','lambda_pixel','teacher_min_analytic_tpr'):
             config.pop(name,None)
+    trajectory_fields=('coordinate_margin_mu','tail_unroll_calls','trajectory_anchor_count','trajectory_shard_size',
+                       'teacher_eval_checkpoints','teacher_eval_n','trajectory_drift_n')
+    if config.get('teacher_objective')=='semantic_sign_v2_trajectory':
+        config.pop('coordinate_margin_mu_candidates',None);config.pop('late_inference_step_count',None)
+    else:
+        for name in (*trajectory_fields,'teacher_only'):config.pop(name,None)
     return config
 
 
@@ -338,6 +370,9 @@ def main(argv=None, method="bitmark"):
     if getattr(a,'reuse_preparation',None) and (a.resume or a.continue_from or a.analyze):
         raise ValueError('--reuse-preparation starts clean teachers in a new run, not resume/continue/analyze')
     if a.analyze:
+        if read_json(a.analyze.resolve()/'config.json').get('teacher_only'):
+            from semantic_sign_trajectory_train import analyze_teacher_only
+            analyze_teacher_only(a.analyze.resolve());return
         from report import summarize
         summarize(a.analyze.resolve())
         return
@@ -378,6 +413,9 @@ def main(argv=None, method="bitmark"):
     carrier = c.get("watermark_method", "bitmark")
     teacher_file = "semantic_teacher.py" if carrier == "semantic_fp" else "serum_teacher.py" if carrier == "serum" else "teacher.py"
     assets_file = "semantic_assets.py" if carrier == "semantic_fp" else "serum_assets.py" if carrier == "serum" else "assets.py"
+    if a.plan_only and c.get('teacher_only'):
+        from semantic_sign_trajectory_train import teacher_plan
+        print(json.dumps(teacher_plan(c),indent=2));return
     if a.plan_only and carrier == "semantic_fp":
         print(json.dumps({"config": c, "students": branches(c), "baseline": "unadapted pinned SD1.4",
             "teacher": "clean SD2.1 -> teacher-side LoRA -> merged native pipeline",
@@ -433,6 +471,8 @@ def main(argv=None, method="bitmark"):
             source_files["requirements-semantic.txt"] = sha256(HERE / "requirements-semantic.txt")
             if c.get('teacher_objective')=='semantic_sign_v1':
                 source_files['../../semantic_sign_fingerprint_codex_spec.md']=sha256(project_root/'semantic_sign_fingerprint_codex_spec.md')
+        if c.get('teacher_objective')=='semantic_sign_v2_trajectory':
+            source_files['../../rssf_teacher_trajectory_rescue_codex_spec.md']=sha256(HERE.parent.parent/'rssf_teacher_trajectory_rescue_codex_spec.md')
         if a.upgrade_execution:
             from semantic_execution import upgrade_execution_manifest
             upgrade_execution_manifest(run, source_files)
@@ -450,6 +490,13 @@ def main(argv=None, method="bitmark"):
         def call(file, label, *args):
             stage(run, label, [py, str(HERE / file), "--run", str(run), *args])
         call(assets_file, "01_assets")
+        if c.get('teacher_only'):
+            call(teacher_file,'02_clean_and_traces','--stage','clean')
+            call(teacher_file,'03_carrier','--stage','carrier')
+            call(teacher_file,'04_clean_scores','--stage','score','--directories',
+                 'teacher_clean_train','teacher_clean_calibration','teacher_clean_validation')
+            call('semantic_sign_trajectory_train.py','05_trajectory_rescue')
+            return
         if carrier == "semantic_fp":
             if c.get('teacher_objective')=='semantic_sign_v1' or not (c.get('continuation') or c.get('preparation_reuse')):
                 call(teacher_file, "01a_clean_teacher", "--stage", "clean")

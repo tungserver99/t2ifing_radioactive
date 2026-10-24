@@ -13,7 +13,7 @@ def check_imports():
     import lpips
 
 
-def native_generate(pipe, prompts, generators, steps):
+def native_generate(pipe, prompts, generators, steps, return_latents=False):
     # Production inference accepts only a standard merged model and ordinary inputs.
     import torch
     # Request the pipeline's ordinary final latents so finiteness can be checked
@@ -24,7 +24,8 @@ def native_generate(pipe, prompts, generators, steps):
         if not torch.isfinite(latent).all(): raise ValueError('Nonfinite native generated latent')
         image = pipe.vae.decode(latent / pipe.vae.config.scaling_factor).sample
         if not torch.isfinite(image).all(): raise ValueError('Nonfinite native decoded image')
-        return pipe.image_processor.postprocess(image, output_type='pil')
+        images=pipe.image_processor.postprocess(image, output_type='pil')
+        return (images,latent) if return_latents else images
 
 
 def numerical_policy():
@@ -35,11 +36,11 @@ def numerical_policy():
     torch.backends.cudnn.allow_tf32 = False
 
 
-def load_native(model):
+def load_native(model, dtype=None):
     import torch
     from diffusers import StableDiffusionPipeline
     numerical_policy()
-    pipe = StableDiffusionPipeline.from_pretrained(str(model), torch_dtype=torch.float16,
+    pipe = StableDiffusionPipeline.from_pretrained(str(model), torch_dtype=dtype or torch.float16,
                 safety_checker=None, local_files_only=True).to('cuda')
     if hasattr(pipe.unet, 'peft_config') and pipe.unet.peft_config:
         raise RuntimeError('Production teacher must contain merged native weights only')
@@ -48,13 +49,17 @@ def load_native(model):
     return pipe
 
 
-def generate_set(run, model, split, label, pipe=None):
+def generate_set(run, model, split, label, pipe=None, limit=None, model_identity=None):
     import torch
     from teacher import valid_image
     from semantic_assets import snapshot_identity
     c = read_json(run/'config.json'); rows = read_json(run/'prompts.json')[split]
-    identity = snapshot_identity(model)
+    if limit is not None:rows=rows[:limit]
+    identity = model_identity or snapshot_identity(model)
     pipe = pipe or load_native(model)
+    if c.get('teacher_objective')=='semantic_sign_v2_trajectory' and label=='teacher_clean_train':
+        from semantic_trajectory import generate_traced_train
+        return generate_traced_train(run,model,pipe,identity)
     out=run/'images'/label; out.mkdir(parents=True, exist_ok=True)
     seeds=[c['seed']*1000000+r['image_id'] for r in rows]
     freeze(out/'generation.json', {'model_hashes': identity, 'split': split,
@@ -147,6 +152,8 @@ def carrier_stage(run):
 
 
 def prompt_rows(run,label):
+    if label.startswith('trajectory_checkpoint_'):
+        return read_json(run/'prompts.json')['validation'][:read_json(run/'config.json')['teacher_eval_n']]
     prompts=read_json(run/'prompts.json')
     if label.startswith('validation_'): return prompts['validation'][:read_json(run/'config.json')['validation_generation_n']]
     for split in ('train','validation','calibration','test'):
@@ -167,6 +174,9 @@ def score(run,directories):
         freeze(out.with_suffix('.provenance.json'), {'carrier_sha256':sha256(run/'carrier/complete.json'),
             'prompt_sha256':sha256(run/'prompts.json'),'reference_assets_sha256':sha256(run/'assets.json'),
             'batch_size':c['score_batch'],'dtype':'float32','probe_timestep':0,'posterior':'mean'})
+        if out.exists():
+            from semantic_report import score_rows
+            score_rows(run,label,len(rows),carrier.to('cpu'));continue
         values=[]
         for start in range(0,len(files),c['score_batch']):
             batch=files[start:start+c['score_batch']]

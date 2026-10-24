@@ -1,17 +1,76 @@
-# Redundant semantic sign fingerprint (RSSF)
+# RSSF teacher trajectory rescue (v2)
 
-The current default is `semantic_sign_v1`, defined by [the locked specification](semantic_sign_fingerprint_codex_spec.md). The historical `threshold_cfg_v1` implementation remains separate; old completed runs can still be analyzed with `--analyze OLD_RUN`.
-
-Run from the repository root in your own server environment:
+The default **shell entry point** now runs the locked [teacher-only rescue](rssf_teacher_trajectory_rescue_codex_spec.md):
 
 ```bash
 bash run_semantic_fp.sh
 ```
 
+Run on the GPU server in your installed environment. The shell uses plain `python`.
+It trains **one** SD2.1 teacher (`mu=.10`, `K_train=24`, rank32 attention+Conv LoRA),
+up to 1500 updates, BF16 / effective batch4 / microbatch1. It never launches a
+student, unadapted SD1.4 generation, FID/KID or a margin/weight sweep.
+
+Clean training generation produces native PNGs and immutable 64-sample trace shards
+in the same pass (5000 train / 1000 calibration / 512 validation). Tracing observes
+real PNDM calls; the pinned scheduler must be PNDM, skip_prk_steps=true, epsilon.
+A strict FP16 clean replay/anchor gate aborts before optimization if cache fidelity
+fails. Tolerances and measured errors are saved in teacher_trace/protocol.json and
+teacher_trace/replay.json; instrumentation equivalence is recorded separately.
+
+Preservation compares guided CFG predictions at one cached native anchor per sample.
+The same optimizer update applies RSSF hinge, LPIPS and pixel MSE through the last
+**four scheduler.step calls**, restored with full PNDM history. Easiest bits come
+only from normal final clean PNG verifier scores. Carrier and exact Binomial
+verifier are unchanged (32 bits, K_detect=24 at alpha=.01).
+
+Full resume checkpoints are saved every 100 updates and at evaluation milestones
+100/250/500/750/1000/1500. All six adapters are screened with native FP16 50-step
+inference on the same fixed first128 validation rows. Eligible means TPR>=.90 and
+CLIP drop<=.01; select lowest LPIPS, then pixel MSE, then earlier step. The selected
+adapter becomes a standard merged SD2.1 and receives full512 native validation.
+Success additionally requires LPIPS<=.15. A diagnostic checkpoint is retained even
+when utility fails; gates/key/mu never change automatically.
+
+The run path is printed at startup. Resume the **same** run after a 24-hour job limit:
+
+```bash
+bash run_semantic_fp.sh --resume RUN_DIR
+```
+
+Completed images, committed trace shards and checkpoint screens are hash checked
+and reused. Incomplete shards may be regenerated; checkpoints restore AdamW,
+sampler order/offset, CPU/CUDA/Python RNG and optimizer step. Exact resume rejects
+code/config/model/carrier/key/scheduler/cache changes.
+
+Inspect result/README.md, result/teacher_only.json, teacher_complete.json,
+result/teacher_trajectory_drift.json/CSV, and paired image grids. Final status is
+teacher_only_completed (all gates passed) or teacher_only_failed; both record
+downstream_started=false. This implementation has CPU tests; scientific quality
+and real SD2.1 replay are measured only when you run it on the server.
+
+`python main.py --teacher-objective semantic_sign_v2_trajectory --teacher-only --plan-only`
+prints the protocol without GPU execution. `--analyze` supports both teacher-only
+reports and historical completed runs. Historical objectives can be selected
+explicitly with `--teacher-objective semantic_sign_v1` or `threshold_cfg_v1`.
+
+
+---
+
+# Historical semantic_sign_v1 campaign
+
+The historical objective is `semantic_sign_v1`, defined by [the locked specification](semantic_sign_fingerprint_codex_spec.md). The historical `threshold_cfg_v1` implementation remains separate; old completed runs can still be analyzed with `--analyze OLD_RUN`.
+
+Run from the repository root in your own server environment:
+
+```bash
+bash run_semantic_fp.sh --teacher-objective semantic_sign_v1
+```
+
 Use existing verified clean preparation to save generation time:
 
 ```bash
-bash run_semantic_fp.sh --reuse-preparation run_semantic_fp_20261020_135117_009783
+bash run_semantic_fp.sh --teacher-objective semantic_sign_v1 --reuse-preparation run_semantic_fp_20261020_135117_009783
 ```
 
 This reuses only clean images/prompts/assets with matching hashes, Gaussian seeds, snapshots and preprocessing. It rebuilds PCA/stability, the top48 PC pool in PC8..64, the32-bit secret, train-only midpoint medians, scores and calibration. It never imports old keys, thresholds or fingerprint weights. Key seed remains the source experiment key seed; all new candidates share the newly frozen carrier/key. No existing result is overwritten.

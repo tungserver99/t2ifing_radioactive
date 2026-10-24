@@ -75,13 +75,14 @@ def detection_metrics(run,label,threshold,n):
             'ci95_low':ci[0],'ci95_high':ci[1],'mean_score':sum(values)/n,**carrier.bit_metrics(q)}
 
 
-def teacher_quality(run,label):
+def teacher_quality(run,label,limit=None):
     from transformers import CLIPModel, CLIPProcessor
     from PIL import Image
     import lpips
     from utility import CLIP_REV
     from semantic_teacher import pixels
     c=read_json(run/'config.json'); rows=read_json(run/'prompts.json')['validation']
+    if limit is not None:rows=rows[:limit]
     sign_objective=is_sign(c)
     clean=run/'images/teacher_clean_validation'; fp=run/'images'/label
     identity={'clean':[sha256(clean/image_name(i)) for i in range(len(rows))],
@@ -94,7 +95,7 @@ def teacher_quality(run,label):
         identity.update(clip_drop_max=min(.01,c['teacher_clip_drop_max']),lpips_max=min(.15,c['teacher_lpips_max']),quality_policy='rssf_clip_lpips_hard_gates',
                         pixel_mse_range='[-1,1]',visual_sample_count=min(8,len(rows)))
     cg=read_json(clean/'generation.json'); fg=read_json(fp/'generation.json')
-    if cg['seeds']!=fg['seeds'] or cg['prompts_sha256']!=fg['prompts_sha256']:
+    if cg['seeds'][:len(rows)]!=fg['seeds'][:len(rows)] or cg['prompts_sha256']!=fg['prompts_sha256']:
         raise ValueError('Teacher quality requires paired prompts and seeds')
     target=run/'result/teacher_candidates'/f'{label}.json'
     if target.exists():

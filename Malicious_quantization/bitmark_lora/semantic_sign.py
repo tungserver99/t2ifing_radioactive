@@ -8,11 +8,13 @@ from numbers import Integral
 
 import torch
 
-OBJECTIVE = 'semantic_sign_v1'
+SIGN_CARRIER_VERSION = 'semantic_sign_v1'
+OBJECTIVE = SIGN_CARRIER_VERSION  # Historical public carrier-version alias.
+SIGN_OBJECTIVES = {OBJECTIVE, 'semantic_sign_v2_trajectory'}
 
 
 def is_sign(config):
-    return config.get('teacher_objective') == OBJECTIVE
+    return config.get('teacher_objective') in SIGN_OBJECTIVES
 
 
 def binomial_tail(k, m):

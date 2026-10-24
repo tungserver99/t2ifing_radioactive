@@ -39,7 +39,7 @@ def prepare(config, run):
     cache = Path(config['cache']); cache.mkdir(parents=True, exist_ok=True)
     if (run/'assets.json').exists():
         prior = read_json(run/'assets.json')
-        for field in ('teacher_clean', 'student'):
+        for field in (('teacher_clean',) if config.get('teacher_only') else ('teacher_clean', 'student')):
             if snapshot_identity(prior[field]) != prior[field+'_hashes']:
                 raise RuntimeError(f'Source model changed: {field}')
         if sha256(run/'prompts.json') != prior['prompt_sha256']:
@@ -57,6 +57,14 @@ def prepare(config, run):
         source = {'local_snapshot': teacher, 'note': 'User-supplied clean SD2.1; content hashes frozen, no substitution'}
     else:
         teacher = hub_snapshot(TEACHER_REPO, TEACHER_REV, cache, keep)
+    if config.get('teacher_only'):
+        unet=read_json(Path(teacher)/'unet/config.json');text=read_json(Path(teacher)/'text_encoder/config.json')
+        if unet.get('cross_attention_dim')!=1024 or text.get('hidden_size')!=1024 or unet.get('in_channels')!=4:
+            raise ValueError('Unexpected clean SD2.1 architecture')
+        result.update(method='semantic_fp',teacher_clean=str(teacher),teacher=str(teacher),student=None,
+                      teacher_source=source,student_revision=STUDENT_REV,student_hashes={},
+                      teacher_clean_hashes=snapshot_identity(teacher),prompt_sha256=sha256(run/'prompts.json'))
+        freeze(run/'assets.json',result);return
     student = (verified_student_snapshot(config['student_snapshot']) if config.get('student_snapshot')
                else hub_snapshot('CompVis/stable-diffusion-v1-4', STUDENT_REV, cache, keep))
     for model,dim in ((teacher,1024),(student,768)):
