@@ -3,6 +3,9 @@ import argparse
 import copy
 import csv
 import gc
+import io
+import os
+import tempfile
 import json
 import math
 import random
@@ -210,13 +213,36 @@ def _verify_screen_images(run,label,record):
     score_rows(run,label,record['identity']['n'])
 
 
+def _write_drift_csv(path,table):
+    """Recover the deterministic export from committed JSON, without inference."""
+    fields=('call_index','mean_drift','median_drift')
+    if not table or any(set(row)!=set(fields) or row['call_index']!=i or
+                        any(not math.isfinite(row[key]) or row[key]<0 for key in fields[1:])
+                        for i,row in enumerate(table)):
+        raise ValueError('Invalid committed trajectory drift table')
+    output=io.StringIO(newline='')
+    writer=csv.DictWriter(output,fieldnames=fields,lineterminator='\n')
+    writer.writeheader();writer.writerows(table)
+    content=output.getvalue().encode('utf8');path=Path(path)
+    if path.exists() and path.read_bytes()==content:return
+    path.parent.mkdir(parents=True,exist_ok=True)
+    fd,temporary=tempfile.mkstemp(dir=path.parent,prefix='.drift-csv-',suffix='.partial')
+    try:
+        with os.fdopen(fd,'wb') as stream:stream.write(content)
+        os.replace(temporary,path)
+    finally:
+        if os.path.exists(temporary):os.unlink(temporary)
+
+
 def trajectory_drift(run,model):
     from semantic_teacher import load_native,native_generate
     c=read_json(run/'config.json');assets=read_json(run/'assets.json');rows=read_json(run/'prompts.json')['validation'][:c['trajectory_drift_n']]
     identity={'selected_sha256':sha256(run/'teacher_fp/selected.json'),'prompt_sha256':sha256(run/'prompts.json'),'n':len(rows)}
     target=run/'result/teacher_trajectory_drift.json'
     if target.exists():
-        if read_json(target)['identity']!=identity:raise RuntimeError('Trajectory drift identity changed')
+        saved=read_json(target)
+        if saved['identity']!=identity:raise RuntimeError('Trajectory drift identity changed')
+        _write_drift_csv(target.with_suffix('.csv'),saved['per_call'])
         return
     paths=[]
     for source in (assets['teacher_clean'],model):
@@ -231,8 +257,7 @@ def trajectory_drift(run,model):
     check_finite(values)
     table=[{'call_index':i,'mean_drift':values[:,i].mean().item(),'median_drift':statistics.median(values[:,i].tolist())} for i in range(values.shape[1])]
     freeze(target,{'identity':identity,'diagnostic_only':True,'normalization':'L2 / sqrt(numel latent)','per_call':table})
-    with (run/'result/teacher_trajectory_drift.csv').open('w',newline='') as f:
-        writer=csv.DictWriter(f,fieldnames=list(table[0]));writer.writeheader();writer.writerows(table)
+    _write_drift_csv(target.with_suffix('.csv'),table)
 
 
 def finish_report(run,screen,chosen,full=None,reason=None):

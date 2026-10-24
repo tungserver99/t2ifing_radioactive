@@ -277,3 +277,108 @@ def test_cached_score_resume_normalizes_carrier_device(tmp_path,monkeypatch):
     monkeypatch.setattr(semantic_report,'score_rows',validate)
     teacher.score(tmp_path,['teacher_clean_train'])
     assert seen==['teacher_clean_train']
+
+
+@pytest.mark.parametrize('existing_csv',[None,'call_index,mean_drift,median_drift\n0,','wrong,header\n'])
+def test_drift_resume_recovers_csv_from_json_without_model(tmp_path,monkeypatch,existing_csv):
+    import csv
+    import io
+    import semantic_teacher
+    from common import write_json,sha256
+    from semantic_sign_trajectory_train import trajectory_drift
+    write_json(tmp_path/'config.json',{'trajectory_drift_n':16})
+    write_json(tmp_path/'assets.json',{})
+    write_json(tmp_path/'prompts.json',{'validation':[{'image_id':i,'text':'fixture'} for i in range(16)]})
+    write_json(tmp_path/'teacher_fp/selected.json',{})
+    identity={'selected_sha256':sha256(tmp_path/'teacher_fp/selected.json'),
+              'prompt_sha256':sha256(tmp_path/'prompts.json'),'n':16}
+    table=[{'call_index':0,'mean_drift':.001,'median_drift':.0005},
+           {'call_index':1,'mean_drift':.002,'median_drift':.0015}]
+    target=tmp_path/'result/teacher_trajectory_drift.json'
+    write_json(target,{'identity':identity,'diagnostic_only':True,'per_call':table})
+    original=target.read_bytes();csv_path=target.with_suffix('.csv')
+    if existing_csv is not None:csv_path.write_text(existing_csv,encoding='utf8')
+    def forbid_model(*args,**kwargs):raise AssertionError('Completed drift JSON must be reused without model generation')
+    monkeypatch.setattr(semantic_teacher,'load_native',forbid_model)
+    trajectory_drift(tmp_path,'unused')
+    assert target.read_bytes()==original
+    rows=list(csv.DictReader(io.StringIO(csv_path.read_text(encoding='utf8'))))
+    assert [int(r['call_index']) for r in rows]==[0,1]
+    assert [float(r['mean_drift']) for r in rows]==[.001,.002]
+    stamp=csv_path.stat().st_mtime_ns
+    trajectory_drift(tmp_path,'unused')
+    assert csv_path.stat().st_mtime_ns==stamp
+
+
+@pytest.mark.parametrize('loss_kind',['fp','lpips','pixel'])
+def test_real_components_propagate_each_tail_loss_to_peft_lora(monkeypatch,loss_kind):
+    """Real library modules, tiny random weights: no SD checkpoint/download/GPU."""
+    import copy
+    from types import SimpleNamespace
+    from diffusers import AutoencoderKL,UNet2DConditionModel
+    from peft import LoraConfig
+    import lpips
+    import semantic_sign_trajectory_train as train
+    from semantic_carrier import SemanticCarrier,SemanticExtractor
+    from semantic_teacher_train import adapter_targets
+    from semantic_trajectory import NativeTrace
+    old_threads=torch.get_num_threads();torch.set_num_threads(1)
+    try:
+        torch.manual_seed(101)
+        reference=UNet2DConditionModel(sample_size=8,in_channels=4,out_channels=4,
+            down_block_types=('CrossAttnDownBlock2D',),up_block_types=('CrossAttnUpBlock2D',),
+            block_out_channels=(32,),layers_per_block=1,norm_num_groups=4,
+            cross_attention_dim=8,attention_head_dim=4).eval().requires_grad_(False)
+        vae=AutoencoderKL(in_channels=3,out_channels=3,latent_channels=4,
+            down_block_types=('DownEncoderBlock2D',)*4,up_block_types=('UpDecoderBlock2D',)*4,
+            block_out_channels=(8,8,8,8),layers_per_block=1,norm_num_groups=4,sample_size=64)
+        ext=SemanticExtractor(SimpleNamespace(unet=reference,vae=vae,tokenizer=None,text_encoder=torch.nn.Identity()),device='cpu')
+        net=copy.deepcopy(reference).train()
+        net.add_adapter(LoraConfig(r=2,lora_alpha=2,init_lora_weights='gaussian',target_modules=adapter_targets(net)))
+        net.enable_gradient_checkpointing()
+        # pnet_rand avoids torchvision weight downloads. Calibrated LPIPS linear
+        # weights are the real v0.1 weights bundled inside the lpips package.
+        perceptual=lpips.LPIPS(net='alex',version='0.1',pnet_rand=True,pretrained=True,verbose=False).eval().requires_grad_(False)
+        scheduler=_pndm();z=torch.randn(1,4,8,8)*.01
+        with NativeTrace(scheduler) as trace:
+            for t in scheduler.timesteps:z=scheduler.step(z*.05,t,z).prev_sample
+        record=trace.records()[0]
+        carrier=SemanticCarrier(torch.zeros(32),torch.eye(32),torch.full((32,),10.),torch.ones(32),list(range(32)),
+                                carrier_version='semantic_sign_v1',medians=torch.zeros(32))
+        hidden=torch.randn(1,2,8);empty=torch.zeros_like(hidden)
+        with torch.no_grad():clean=vae.decode(z/vae.config.scaling_factor).sample.clamp(-1,1).detach()
+        clean_r=torch.zeros(1,32);predictions=[];original=train.cfg_forward
+        def observe(*args,**kwargs):
+            value=original(*args,**kwargs);value.retain_grad();predictions.append(value);return value
+        monkeypatch.setattr(train,'cfg_forward',observe)
+        config=dict(teacher_precision='no',coordinate_margin_mu=.1,sign_k_train=24,
+                    lambda_preserve=0.,lambda_fp=1. if loss_kind=='fp' else 0.,
+                    lambda_quality=0. if loss_kind=='fp' else 1.,
+                    lambda_lpips=1. if loss_kind=='lpips' else 0.,lambda_pixel=1. if loss_kind=='pixel' else 0.)
+        result=train.trajectory_backward(net,ext,carrier,_pndm,perceptual,[record],hidden,empty,clean,clean_r,[0],config,lambda loss:loss.backward())
+        gradients=[p.grad for name,p in net.named_parameters() if 'lora_' in name and p.grad is not None]
+        assert gradients and all(torch.isfinite(g).all() for g in gradients)
+        assert sum(g.abs().sum().item() for g in gradients)>0
+        assert len(predictions)==5
+        assert all(p.grad is not None and torch.isfinite(p.grad).all() and p.grad.abs().sum()>0 for p in predictions[1:])
+        assert all(p.grad is None for module in (reference,vae,perceptual) for p in module.parameters())
+        assert clean.grad is None and clean_r.grad is None
+        assert all(not h.requires_grad for h in record['boundary_state']['ets'])
+        assert result[loss_kind if loss_kind!='pixel' else 'pixel_mse']>0
+    finally:
+        torch.set_num_threads(old_threads)
+
+
+def test_drift_csv_atomic_replace_preserves_previous_file_on_interruption(tmp_path,monkeypatch):
+    import semantic_sign_trajectory_train as train
+    target=tmp_path/'drift.csv';target.write_bytes(b'previous-complete-file')
+    table=[{'call_index':0,'mean_drift':.1,'median_drift':.05}]
+    replace=train.os.replace
+    def interrupted(*args):raise InterruptedError('simulated termination before rename')
+    monkeypatch.setattr(train.os,'replace',interrupted)
+    with pytest.raises(InterruptedError):train._write_drift_csv(target,table)
+    assert target.read_bytes()==b'previous-complete-file'
+    assert not list(tmp_path.glob('.drift-csv-*.partial'))
+    monkeypatch.setattr(train.os,'replace',replace)
+    train._write_drift_csv(target,table)
+    assert target.read_text(encoding='utf8').splitlines()==['call_index,mean_drift,median_drift','0,0.1,0.05']

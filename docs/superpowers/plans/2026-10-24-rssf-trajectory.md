@@ -49,3 +49,13 @@
 - User authorized commit/push at the outset; integrate into main with a fast-forward and push without force after final verification.
 
 - Final diagnostic check: r=0 is counted using the unchanged image_bits tie rule; a failing-then-passing assertion covers negative secret signs at zero.
+
+## Follow-up requested by user: audit, fix, verify and push
+
+- [x] Reconcile the code with the complete locked specification and independent review.
+- [x] Reproduce missing/truncated/mismatched drift CSV on resume; repair from committed JSON with atomic output and no generation.
+- [x] Validate interrupted CSV rename preserves prior output and permits retry.
+- [x] Add real LPIPS/Diffusers VAE/UNet/PEFT CPU gradient tests for fingerprint, LPIPS and pixel losses separately, with no pretrained SD models or GPU.
+- [x] Run final semantic suite: 112 passed and 2 subtests passed; shell fresh/resume plan-only checks pass.
+- Independent review: no additional concrete blockers/spec gaps found in current changes.
+- Integration authorized by user: add, commit, fast-forward main and push; preserve unrelated validation.json.
