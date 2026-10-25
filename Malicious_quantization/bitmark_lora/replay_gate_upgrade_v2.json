@@ -1,0 +1,51 @@
+{
+  "policy": "pretraining_replay_gate_definition_v2",
+  "before": {
+    "semantic_replay_diagnostics.py": [
+      "e47bb89cd7e5b28d8e8a3d8f619ed47cb4963c332e81ef4f0959bbbba0fc7a30",
+      "a680ae88ccefe30bc60956ac660a743d67183bb6f8f6a0fbe12e1ba197fee74d"
+    ],
+    "semantic_trajectory.py": [
+      "e799581840505c71a2febcc931a5e21fc318ba75504e61bf5cde3257b7a6b667",
+      "2722c8d8b2b4b99164c67560e227bcf737c48d38aaf84831d1bfe7993e5e582a"
+    ],
+    "semantic_replay_upgrade.py": [
+      "63be916adeb76597c1ec308835e18affcfc3e759f7ddc116e6ff3f508fa7a0bd",
+      "cbeb70037dcd842ef5d0ee1efb7fd7224a1c647a09ecd6be7d8ac7be668e69df"
+    ],
+    "test_semantic_replay_diagnostics.py": [
+      "b98d626571ad664dbd5a2742f3c137d5c8eaf830d1a0eeac6b83fe9d233bebc9",
+      "14a0786a09339f70d05c7917844643a5312cb0f1db10b56b3df32415ff234d09"
+    ]
+  },
+  "after": {
+    "semantic_replay_diagnostics.py": [
+      "d19073a3e6ee5f09bd753570c96642cf9a0e987d4508aa2d342d1d31b8dc92d4",
+      "bba9fb24bd0ee997d008a5193890f8c857ebdfee9486686c9f93efc4e8d0dd77"
+    ],
+    "semantic_trajectory.py": [
+      "8392878c4625292addc68530366f111b767882ff437c11e046737470b7ec7790",
+      "927cf35393ada9e460034078ba0fb99c17443b0aa2b4fc3f35b552a89ae4880f"
+    ],
+    "semantic_replay_upgrade.py": [
+      "69c36f38491481035d1d36933381f6122517f55539b8a37a80907bacb75b0e2c",
+      "a8a85ace69afc6c7be621af4654330a49f11e3780231b1c5f667616e8ff61470"
+    ],
+    "test_semantic_replay_diagnostics.py": [
+      "33b2eaeb20361e36a9b10a8413fe5df9c4c3194e8fad40206a5420f81033aafd",
+      "0cadf717f40e6609fa846d55f49cb162da8f7aa4fda32225e8b3de1cd0e07c82"
+    ],
+    "semantic_replay_gate_upgrade.py": [
+      "b9b533b814a2b9c129ad04d2821eb4d37df8c0d797d684bfc7559f277f9d1cb8",
+      "7d86fae67136d10e262a7719e18c214ea0da8df513ddf0f6872c13dd50695566"
+    ],
+    "test_semantic_replay_gate.py": [
+      "e8c13cbef7c46f67fc837e061b9fd79285aa3060805d70f85655e95dab1d4374",
+      "28e942d85815b5ca6f6d0ffb3818d1a6ecd8aab95c13f56358583bbaaf5137c4"
+    ]
+  },
+  "added_files": [
+    "semantic_replay_gate_upgrade.py",
+    "test_semantic_replay_gate.py"
+  ]
+}

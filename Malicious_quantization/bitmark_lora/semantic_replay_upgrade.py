@@ -11,6 +11,9 @@ ADDED_FILES={'semantic_replay_diagnostics.py','semantic_replay_upgrade.py','test
 
 def upgrade_replay_diagnostics(run,current):
     before=read_json(run/'code_manifest.json');c=read_json(run/'config.json')
+    if 'semantic_replay_upgrade.py' in before:
+        from semantic_replay_gate_upgrade import upgrade_replay_gate
+        return upgrade_replay_gate(run,current)
     if c.get('watermark_method')!='semantic_fp' or c.get('teacher_objective')!='semantic_sign_v2_trajectory' or not c.get('teacher_only'):
         raise RuntimeError('Replay diagnostics upgrade requires the v2 teacher-only experiment')
     trajectory=run/'teacher_fp/trajectory'

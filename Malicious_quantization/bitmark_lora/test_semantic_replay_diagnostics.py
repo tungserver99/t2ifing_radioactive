@@ -4,7 +4,7 @@ import torch
 from common import read_json, write_json
 
 
-def test_image_checks_collect_all_samples_and_keep_original_gate():
+def test_image_checks_collect_all_samples_and_gate_float_replay():
     from semantic_replay_diagnostics import image_diagnostics
     clean=torch.zeros(4,3,2,2)
     replay=clean.clone();replay[0]=.01;replay[2]=.02
@@ -13,10 +13,39 @@ def test_image_checks_collect_all_samples_and_keep_original_gate():
     rows=image_diagnostics(replay,clean,reference,distance,[0,1,2,3],
                            {'png_pixel_max':.1,'lpips_max':1e-5})
     assert [r['image_id'] for r in rows]==[0,1,2,3]
-    assert [r['passed'] for r in rows]==[False,True,False,True]
+    assert [r['passed'] for r in rows]==[True,True,False,True]
     assert rows[0]['reference_png_lpips']>1e-5
     assert rows[0]['replay_reference_lpips']==0
-    assert not rows[0]['passed']  # A PNG baseline never overrides the frozen gate.
+    assert rows[0]['passed']  # PNG LPIPS is a serialization baseline, not replay error.
+
+
+def test_png_quantization_baseline_above_lpips_limit_passes():
+    from semantic_replay_diagnostics import image_diagnostics
+    from semantic_trajectory import REPLAY_TOLERANCES
+    png=torch.zeros(1,3,2,2);reference=png+.004
+    def distance(a,b):return 100*(a-b).square().mean((1,2,3))
+    row=image_diagnostics(reference.clone(),png,reference,distance,[0],REPLAY_TOLERANCES)[0]
+    assert row['lpips']>1e-4 and row['reference_png_lpips']>1e-4
+    assert row['replay_reference_lpips']==0 and row['passed']
+    assert row['failed_checks']==[]
+
+
+def test_direct_replay_error_fails_even_when_replay_matches_png():
+    from semantic_replay_diagnostics import image_diagnostics
+    from semantic_trajectory import REPLAY_TOLERANCES
+    png=torch.zeros(1,3,2,2);reference=png+.004
+    row=image_diagnostics(png.clone(),png,reference,
+        lambda a,b:100*(a-b).square().mean((1,2,3)),[0],REPLAY_TOLERANCES)[0]
+    assert row['lpips']==0
+    assert row['failed_checks']==['replay_reference_lpips_max']
+
+
+def test_reference_png_pixel_corruption_fails_independently():
+    from semantic_replay_diagnostics import image_diagnostics
+    png=torch.zeros(1,3,2,2);reference=png+.02
+    row=image_diagnostics(png.clone(),png,reference,
+        lambda a,b:(a-b).square().mean((1,2,3)),[0],{'png_pixel_max':.01,'lpips_max':1.})[0]
+    assert row['failed_checks']==['reference_png_pixel_max']
 
 
 def test_nonfinite_diagnostics_remain_errors():
@@ -133,7 +162,7 @@ def test_replay_upgrade_rejects_started_training(tmp_path):
     assert read_json(tmp_path/'code_manifest.json')==old
 
 
-def test_reviewed_runtime_hashes_match_actual_checkout_and_upgrade(tmp_path):
+def test_diagnostics_only_upgrade_cannot_silently_change_gate(tmp_path):
     from common import HERE,sha256
     from semantic_execution import upgrade_execution_manifest
     from semantic_replay_upgrade import BASELINE_HASHES,ADDED_FILES
@@ -143,8 +172,9 @@ def test_reviewed_runtime_hashes_match_actual_checkout_and_upgrade(tmp_path):
     write_json(tmp_path/'code_manifest.json',before)
     write_json(tmp_path/'config.json',{'watermark_method':'semantic_fp',
         'teacher_objective':'semantic_sign_v2_trajectory','teacher_only':True})
-    upgrade_execution_manifest(tmp_path,current)
-    assert read_json(tmp_path/'code_manifest.json')==current
+    with pytest.raises(RuntimeError,match='Unapproved'):
+        upgrade_execution_manifest(tmp_path,current)
+    assert read_json(tmp_path/'code_manifest.json')==before
 
 
 @pytest.mark.parametrize('png_offset,prediction_offset,passed',[(0.,0.,True),(.02,0.,False),(0.,.01,False)])

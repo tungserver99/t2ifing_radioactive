@@ -108,6 +108,14 @@ Strict resume uses the same frozen config/code/environment and restores full wei
 
 ### Replay diagnostics for an interrupted v2 campaign
 
+The corrected replay gate applies `lpips_max=1e-4` to **replay vs reference
+float decode** of the cached original final latent. Both replay/PNG and
+reference/PNG pixel maxima must satisfy the unchanged `png_pixel_max`.
+LPIPS against saved PNGs is reported as a serialization baseline only.
+All anchor, latent and scheduler checks remain mandatory. See
+`docs/validation/replay_gate_definition_v2.md` for the audited scientific gate
+correction and exact resume command for runs already blocked under the PNG gate.
+
 Clean replay must pass before teacher training (rescue specification section 14).
 A numerical rejection now collects all four sample results in
 `teacher_trace/replay_diagnostics.json`, including original-decoded/PNG and
@@ -123,7 +131,11 @@ For the known pre-training v2 source revision, explicitly use
 all files from this update. The upgrade checks known source hashes and rejects
 unrelated edits or already-started teacher training. It preserves clean data,
 traces, key and config, and records old/new manifests in
-`execution_upgrades/replay_diagnostics_v1.json`. See
+`execution_upgrades/replay_diagnostics_v1.json` for the historical diagnostics-only
+revision, or `execution_upgrades/replay_gate_definition_v2.json` for the corrected
+LPIPS gate. The latter archives stale reports and explicitly records
+`scientific_change=true`; config, trace, carrier/key and images/scores remain
+unchanged. See
 `docs/validation/replay_diagnostics_20261025.md` for the resume command to use in
 your server's PBS script. `--analyze RUN_DIR` also reads blocked replay reports.
 

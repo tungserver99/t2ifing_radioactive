@@ -1,8 +1,15 @@
-"""Explain replay rejection without weakening the frozen scientific gate."""
+"""Validate float replay separately from the saved 8-bit PNG baseline."""
 import traceback
 import torch
 from common import read_json,write_json,sha256
 from semantic_carrier import check_finite
+
+REPLAY_GATE_DEFINITION={
+    'version':'float_reference_lpips_v2',
+    'lpips_hard_gate':'replay_reference_lpips <= lpips_max',
+    'pixel_sanity_gates':['pixel_max_abs_error <= png_pixel_max',
+                          'reference_png_pixel_max <= png_pixel_max'],
+    'diagnostic_only':['lpips','reference_png_lpips']}
 
 
 def comparison_check(name,compare):
@@ -32,11 +39,13 @@ def image_diagnostics(replay,clean,reference,perceptual,ids,tolerances):
     rows=[]
     for j,i in enumerate(ids):
         pixel=(replay[j]-clean[j]).abs().max().item();lp=distances[j].item()
+        reference_pixel=(reference[j]-clean[j]).abs().max().item()
         failed=[]
-        if pixel>tolerances['png_pixel_max']:failed.append('png_pixel_max')
-        if lp>tolerances['lpips_max']:failed.append('lpips_max')
+        if pixel>tolerances['png_pixel_max']:failed.append('replay_png_pixel_max')
+        if reference_pixel>tolerances['png_pixel_max']:failed.append('reference_png_pixel_max')
+        if direct[j].item()>tolerances['lpips_max']:failed.append('replay_reference_lpips_max')
         rows.append({'image_id':i,'pixel_max_abs_error':pixel,'lpips':lp,
-                     'reference_png_pixel_max':(reference[j]-clean[j]).abs().max().item(),
+                     'reference_png_pixel_max':reference_pixel,
                      'reference_png_lpips':baseline[j].item(),
                      'replay_reference_pixel_max':(replay[j]-reference[j]).abs().max().item(),
                      'replay_reference_lpips':direct[j].item(),
@@ -57,17 +66,24 @@ def report_replay_failure(run):
     lines=['# RSSF v2 teacher-only replay report','','Status: teacher_only_blocked.',
            'Clean replay validation FAILED. No teacher training or student jobs started.',
            'The experiment is incomplete; this is not evidence that the fingerprint method failed.',
-           'All replay thresholds and cached artifacts remain unchanged.','',
-           '| Image | Pixel max | LPIPS vs PNG | Reference vs PNG LPIPS | Replay vs reference LPIPS | Pass |',
-           '|---:|---:|---:|---:|---:|:---:|']
+           'Numeric tolerances and cached artifacts are unchanged.',
+           'HARD GATE: replay vs reference float decode LPIPS <= lpips_max.',
+           'PNG serialization/integrity sanity: BOTH replay and reference vs PNG pixel max <= png_pixel_max.',
+           'Replay/PNG and reference/PNG LPIPS are diagnostic serialization metrics only.','',
+           '| Image | Replay/reference LPIPS [GATED] | Replay/PNG LPIPS [diagnostic] | Reference/PNG LPIPS [diagnostic] | Replay/PNG pixel max [GATED] | Reference/PNG pixel max [GATED] | Pass |',
+           '|---:|---:|---:|---:|---:|---:|:---:|']
+    failed_images=[]
     for row in diagnostic.get('samples',[]):
-        lines.append('| {} | {} | {} | {} | {} | {} |'.format(row['image_id'],
-            row.get('pixel_max_abs_error','unavailable'),row.get('lpips','unavailable'),
-            row.get('reference_png_lpips','unavailable'),row.get('replay_reference_lpips','unavailable'),row['passed']))
+        lines.append('| {} | {} | {} | {} | {} | {} | {} |'.format(row['image_id'],
+            row.get('replay_reference_lpips','unavailable'),row.get('lpips','unavailable'),
+            row.get('reference_png_lpips','unavailable'),row.get('pixel_max_abs_error','unavailable'),
+            row.get('reference_png_pixel_max','unavailable'),row['passed']))
+        if row.get('failed_checks'):failed_images.append(f"Image {row['image_id']} failed: {', '.join(row['failed_checks'])}")
+    for failure in failed_images:lines+=['',failure]
     for check in diagnostic.get('checks',[]):
         if not check['passed']:lines+=['',f"Failed {check['name']}: {check['error']}"]
     lines+=['','Details: teacher_trace/replay_diagnostics.json.',
-            'Reference/PNG and replay/reference measurements are diagnostic only; neither overrides the frozen gate.','']
+            'All numerical anchor, latent and scheduler-state checks must also pass.','']
     (run/'result/README.md').write_text('\n'.join(lines),encoding='utf8')
     print(f"REPLAY VALIDATION FAILED - TEACHER BLOCKED. Report: {run/'result/README.md'}",flush=True)
     return report

@@ -282,11 +282,12 @@ def verify_replay(run):
     import gc
     import lpips
     from semantic_teacher import load_native,pixels
-    from semantic_replay_diagnostics import comparison_check,image_diagnostics
+    from semantic_replay_diagnostics import comparison_check,image_diagnostics,REPLAY_GATE_DEFINITION
     c=read_json(run/'config.json');assets=read_json(run/'assets.json');reader=TraceReader(run/'teacher_trace')
     identity={'trace_sha256':sha256(run/'teacher_trace/complete.json'),
               'clean_images_sha256':sha256(run/'images/teacher_clean_train/image_hashes.json'),
-              'tolerances':REPLAY_TOLERANCES,'sample_ids':[0,1,2,3]}
+              'tolerances':REPLAY_TOLERANCES,'sample_ids':[0,1,2,3],
+              'gate_definition':REPLAY_GATE_DEFINITION}
     target=run/'teacher_trace/replay.json'
     if target.exists():
         old=read_json(target)
@@ -301,7 +302,7 @@ def verify_replay(run):
 
 
 def _measure_replay(run,c,assets,reader,identity,target,pipe,lpips,pixels,comparison_check,image_diagnostics,device='cuda'):
-    from semantic_replay_diagnostics import tensor_comparison
+    from semantic_replay_diagnostics import tensor_comparison,REPLAY_GATE_DEFINITION
     perceptual=lpips.LPIPS(net='alex',version='0.1').cuda().eval().requires_grad_(False)
     prompts=read_json(run/'prompts.json')['train'];results=[]
     ids=identity['sample_ids']
@@ -341,10 +342,16 @@ def _measure_replay(run,c,assets,reader,identity,target,pipe,lpips,pixels,compar
                             'cached_output_latent_error':(cached_final[j]-expected[j]).abs().max().item(),
                             'anchor_max_abs_errors':anchor_errors,
                             'call_count':record['call_count'],'final_counter':scheduler.counter})
-            print(f"Replay image {row['image_id']}: passed={row['passed']}, pixel={row['pixel_max_abs_error']}, LPIPS={row['lpips']}",flush=True)
+            print(f"Replay image {row['image_id']}: passed={row['passed']}, "
+                  f"LPIPS(replay/reference)[GATED]={row['replay_reference_lpips']}, "
+                  f"LPIPS(replay/PNG)[diagnostic]={row['lpips']}, "
+                  f"LPIPS(reference/PNG)[diagnostic]={row['reference_png_lpips']}, "
+                  f"replay/PNG pixel={row['pixel_max_abs_error']}, reference/PNG pixel={row['reference_png_pixel_max']}, "
+                  f"failed_checks={row['failed_checks']}",flush=True)
     passed=all(row['passed'] for row in results) and all(check['passed'] for check in checks)
     diagnostic={'identity':identity,'passed':passed,'checks':checks,'samples':results,
-                'reference_definition':'FP16 VAE decode of original cached final latent; diagnostic only'}
+                'gate_definition':REPLAY_GATE_DEFINITION,
+                'reference_definition':'FP16 VAE decode of original cached final latent; float replay correctness reference'}
     write_json(run/'teacher_trace/replay_diagnostics.json',diagnostic)
     if passed:freeze(target,{'identity':identity,'passed':True,'samples':results})
     return passed
