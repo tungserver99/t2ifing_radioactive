@@ -104,7 +104,28 @@ python main.py --analyze COMPLETED_RUN
 python main.py --teacher-check YOUR_NEW_RSSF_RUN
 ```
 
-Strict resume uses the same frozen config/code/environment and restores full weights, AdamW/scaler, sampler order/offset and CPU/CUDA/Python RNG. It continues from the latest complete checkpoint every100 updates, replaying any later unsaved updates. Twelve scratch readiness updates check gradients/VRAM and restore weights/RNG before training. `--teacher-check` is only a fresh-optimizer diagnostic. `--upgrade-execution` belongs to the historical threshold optimization and cannot migrate a threshold teacher into RSSF. Historical `--continue-from` retains its historical source objective; RSSF does not warm-start candidates.
+Strict resume uses the same frozen config/code/environment and restores full weights, AdamW/scaler, sampler order/offset and CPU/CUDA/Python RNG. It continues from the latest complete checkpoint every100 updates, replaying any later unsaved updates. Twelve scratch readiness updates check gradients/VRAM and restore weights/RNG before training. `--teacher-check` is only a fresh-optimizer diagnostic. `--upgrade-execution` supports the historical threshold optimization and the narrowly audited pre-training v2 replay diagnostics revision described below; it cannot migrate a threshold teacher into RSSF. Historical `--continue-from` retains its historical source objective; RSSF does not warm-start candidates.
+
+### Replay diagnostics for an interrupted v2 campaign
+
+Clean replay must pass before teacher training (rescue specification section 14).
+A numerical rejection now collects all four sample results in
+`teacher_trace/replay_diagnostics.json`, including original-decoded/PNG and
+replay/original-decoded comparisons, then writes `result/replay_failure.json`
+and `result/README.md`. The status is `teacher_only_blocked`: the diagnostic job
+ends normally, but the teacher experiment has not completed. Training and
+students are not started, and no `teacher_complete.json` is written. Actual
+runtime/integrity errors still exit nonzero and write
+`result/teacher_execution_error.json`. Frozen replay thresholds are unchanged.
+
+For the known pre-training v2 source revision, explicitly use
+`bash run_semantic_fp.sh --resume RUN_DIR --upgrade-execution` after synchronizing
+all files from this update. The upgrade checks known source hashes and rejects
+unrelated edits or already-started teacher training. It preserves clean data,
+traces, key and config, and records old/new manifests in
+`execution_upgrades/replay_diagnostics_v1.json`. See
+`docs/validation/replay_diagnostics_20261025.md` for the resume command to use in
+your server's PBS script. `--analyze RUN_DIR` also reads blocked replay reports.
 
 ## Results and images
 

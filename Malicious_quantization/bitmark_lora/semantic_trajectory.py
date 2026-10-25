@@ -282,6 +282,7 @@ def verify_replay(run):
     import gc
     import lpips
     from semantic_teacher import load_native,pixels
+    from semantic_replay_diagnostics import comparison_check,image_diagnostics
     c=read_json(run/'config.json');assets=read_json(run/'assets.json');reader=TraceReader(run/'teacher_trace')
     identity={'trace_sha256':sha256(run/'teacher_trace/complete.json'),
               'clean_images_sha256':sha256(run/'images/teacher_clean_train/image_hashes.json'),
@@ -290,48 +291,63 @@ def verify_replay(run):
     if target.exists():
         old=read_json(target)
         if old['identity']!=identity or not old['passed']:raise RuntimeError('Clean replay proof changed')
-        return
-    pipe=load_native(assets['teacher_clean']);perceptual=lpips.LPIPS(net='alex',version='0.1').cuda().eval().requires_grad_(False)
+        return True
+    pipe=load_native(assets['teacher_clean']);perceptual=None
+    try:
+        return _measure_replay(run,c,assets,reader,identity,target,pipe,lpips,pixels,
+                               comparison_check,image_diagnostics)
+    finally:
+        del pipe,perceptual;gc.collect();torch.cuda.empty_cache()
+
+
+def _measure_replay(run,c,assets,reader,identity,target,pipe,lpips,pixels,comparison_check,image_diagnostics,device='cuda'):
+    from semantic_replay_diagnostics import tensor_comparison
+    perceptual=lpips.LPIPS(net='alex',version='0.1').cuda().eval().requires_grad_(False)
     prompts=read_json(run/'prompts.json')['train'];results=[]
     ids=identity['sample_ids']
     record=batch_records([reader.get(i) for i in ids])
     with torch.inference_mode():
-        text=pipe._encode_prompt([prompts[i]['text'] for i in ids],'cuda',1,True)
+        text=pipe._encode_prompt([prompts[i]['text'] for i in ids],device,1,True)
         empty,cond=text.chunk(2)
-        scheduler=restore_scheduler(native_scheduler(assets['teacher_clean']),record,'cuda')
-        anchor_errors=[]
+        scheduler=restore_scheduler(native_scheduler(assets['teacher_clean']),record,device)
+        anchor_errors=[];checks=[]
         for j,t in enumerate(record['anchor_timesteps']):
-            z=record['anchor_latents'][j].cuda();expected=record['anchor_predictions'][j].cuda()
-            actual=cfg_forward(pipe.unet,scheduler,z,torch.tensor(t,device='cuda'),cond,empty)
-            torch.testing.assert_close(actual,expected,atol=REPLAY_TOLERANCES['anchor_atol'],rtol=REPLAY_TOLERANCES['anchor_rtol'])
+            z=record['anchor_latents'][j].to(device);expected=record['anchor_predictions'][j].to(device)
+            actual=cfg_forward(pipe.unet,scheduler,z,torch.tensor(t,device=device),cond,empty)
+            checks.append(tensor_comparison(f'anchor_{j}',actual,expected,
+                atol=REPLAY_TOLERANCES['anchor_atol'],rtol=REPLAY_TOLERANCES['anchor_rtol']))
             anchor_errors.append((actual-expected).abs().max().item())
         final=replay_tail(scheduler,record,lambda z,t:cfg_forward(pipe.unet,scheduler,z,t,cond,empty))
-        expected=record['final_latent'].cuda()
-        torch.testing.assert_close(final,expected,atol=REPLAY_TOLERANCES['latent_atol'],rtol=REPLAY_TOLERANCES['latent_rtol'])
+        expected=record['final_latent'].to(device)
+        checks.append(tensor_comparison('final_latent',final,expected,
+            atol=REPLAY_TOLERANCES['latent_atol'],rtol=REPLAY_TOLERANCES['latent_rtol']))
         check_finite(final)
-        cached=restore_scheduler(native_scheduler(assets['teacher_clean']),record,'cuda');counter=[0]
+        cached=restore_scheduler(native_scheduler(assets['teacher_clean']),record,device);counter=[0]
         def cached_prediction(z,t):
-            out=record['tail_outputs'][counter[0]].cuda();counter[0]+=1;return out
+            out=record['tail_outputs'][counter[0]].to(device);counter[0]+=1;return out
         cached_final=replay_tail(cached,record,cached_prediction)
-        torch.testing.assert_close(cached_final,expected,atol=0,rtol=0)
-        assert_state_close(scheduler_state(cached),record['final_state'],atol=0,rtol=0)
-        assert_state_close(scheduler_state(scheduler),record['final_state'],
-                           atol=REPLAY_TOLERANCES['latent_atol'],rtol=REPLAY_TOLERANCES['latent_rtol'])
+        checks.append(tensor_comparison('cached_output_latent',cached_final,expected,atol=0,rtol=0))
+        checks.append(comparison_check('cached_scheduler_state',lambda:assert_state_close(scheduler_state(cached),record['final_state'],atol=0,rtol=0)))
+        checks.append(comparison_check('replayed_scheduler_state',lambda:assert_state_close(scheduler_state(scheduler),record['final_state'],
+                           atol=REPLAY_TOLERANCES['latent_atol'],rtol=REPLAY_TOLERANCES['latent_rtol'])))
         image=pipe.vae.decode(final/pipe.vae.config.scaling_factor).sample.clamp(-1,1).float()
+        reference=pipe.vae.decode(expected/pipe.vae.config.scaling_factor).sample.clamp(-1,1).float()
         from common import image_name
         clean=pixels([run/'images/teacher_clean_train'/image_name(i) for i in ids])
         check_finite(image)
-        distances=perceptual(image,clean).flatten()
-        for j,i in enumerate(ids):
-            pixel=(image[j]-clean[j]).abs().max().item();lp=distances[j].item()
-            if pixel>REPLAY_TOLERANCES['png_pixel_max'] or lp>REPLAY_TOLERANCES['lpips_max']:
-                raise ValueError(f'Clean tail replay failed: pixel={pixel}, LPIPS={lp}')
-            results.append({'image_id':i,'latent_max_abs_error':(final[j]-expected[j]).abs().max().item(),
+        results=image_diagnostics(image,clean,reference,perceptual,ids,REPLAY_TOLERANCES)
+        for j,row in enumerate(results):
+            row.update({'latent_max_abs_error':(final[j]-expected[j]).abs().max().item(),
                             'cached_output_latent_error':(cached_final[j]-expected[j]).abs().max().item(),
-                            'pixel_max_abs_error':pixel,'lpips':lp,'anchor_max_abs_errors':anchor_errors,
+                            'anchor_max_abs_errors':anchor_errors,
                             'call_count':record['call_count'],'final_counter':scheduler.counter})
-    freeze(target,{'identity':identity,'passed':True,'samples':results})
-    del pipe,perceptual;gc.collect();torch.cuda.empty_cache()
+            print(f"Replay image {row['image_id']}: passed={row['passed']}, pixel={row['pixel_max_abs_error']}, LPIPS={row['lpips']}",flush=True)
+    passed=all(row['passed'] for row in results) and all(check['passed'] for check in checks)
+    diagnostic={'identity':identity,'passed':passed,'checks':checks,'samples':results,
+                'reference_definition':'FP16 VAE decode of original cached final latent; diagnostic only'}
+    write_json(run/'teacher_trace/replay_diagnostics.json',diagnostic)
+    if passed:freeze(target,{'identity':identity,'passed':True,'samples':results})
+    return passed
 
 
 def generate_traced_train(run,model,pipe,model_hashes):
@@ -420,6 +436,8 @@ def assert_state_close(actual,expected,atol,rtol):
         if len(actual)!=len(expected):raise ValueError('Replay history length changed')
         for a,b in zip(actual,expected):assert_state_close(a,b,atol,rtol)
     elif isinstance(actual,torch.Tensor):
+        if actual.shape!=expected.shape or actual.dtype!=expected.dtype:
+            raise ValueError('Replay scheduler tensor shape/dtype changed')
         torch.testing.assert_close(actual.cpu(),expected.cpu(),atol=atol,rtol=rtol)
     elif isinstance(actual,np.ndarray):
         if not np.array_equal(actual,expected):raise ValueError('Replay scheduler sequence changed')

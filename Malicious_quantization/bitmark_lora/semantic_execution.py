@@ -13,6 +13,9 @@ def upgrade_execution_manifest(run, current):
     if before == current:
         return
     c = read_json(run/'config.json')
+    if c.get('teacher_objective') == 'semantic_sign_v2_trajectory':
+        from semantic_replay_upgrade import upgrade_replay_diagnostics
+        return upgrade_replay_diagnostics(run, current)
     if c.get('watermark_method') != 'semantic_fp' or c.get('teacher_objective') != 'threshold_cfg_v1':
         raise RuntimeError('Execution upgrade only supports the threshold_cfg_v1 experiment')
     changed = {name for name in before.keys() | current.keys() if before.get(name) != current.get(name)}

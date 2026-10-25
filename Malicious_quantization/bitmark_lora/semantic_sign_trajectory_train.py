@@ -288,6 +288,16 @@ def finish_report(run,screen,chosen,full=None,reason=None):
 
 
 def campaign(run):
+    from semantic_replay_diagnostics import report_execution_error
+    progress={'phase':'campaign_prerequisites'}
+    try:
+        return _campaign(run,progress)
+    except Exception as exc:
+        report_execution_error(run,progress['phase'],exc)
+        raise
+
+
+def _campaign(run,progress):
     from semantic_sign_report import freeze_analytic_verifier,validate_clean_null,analytic_metrics,paired_pixel_visuals
     from semantic_report import teacher_quality,freeze_null
     from semantic_teacher_train import merge_teacher
@@ -297,12 +307,20 @@ def campaign(run):
     if c.get('teacher_objective')!='semantic_sign_v2_trajectory' or not c.get('teacher_only'):
         raise ValueError('This campaign is exclusively v2 teacher-only')
     freeze_analytic_verifier(run);freeze_null(run,'teacher');validate_clean_null(run,labels=('teacher_clean_calibration',))
-    verify_replay(run);train_trajectory(run)
+    progress['phase']='replay_validation'
+    if not verify_replay(run):
+        from semantic_replay_diagnostics import report_replay_failure
+        report_replay_failure(run)
+        return
+    progress['phase']='teacher_training'
+    train_trajectory(run)
+    progress['phase']='checkpoint_screening'
     screening=[screen_checkpoint(run,s) for s in c['teacher_eval_checkpoints']]
     freeze(run/'teacher_fp/checkpoint_screening.json',{'checkpoints':screening,'subset':'first 128 validation rows'})
     chosen=choose_checkpoint(screening)
     if chosen is None:
         finish_report(run,screening,None,reason='No checkpoint meets analytic TPR and CLIP eligibility. Students stopped.');return
+    progress['phase']='selected_teacher_merge'
     folder=run/'teacher_fp/trajectory'/f"checkpoint-{chosen['step']}"
     model=merge_teacher(run,folder)
     selected={**chosen,'model':str(model.relative_to(run)),'model_hashes':snapshot_identity(model),
@@ -310,6 +328,7 @@ def campaign(run):
               'selection_rule':'TPR>=.90 and CLIP drop<=.01; lowest LPIPS, then pixel MSE, then earlier step',
               'config_sha256':sha256(run/'config.json'),'carrier_sha256':sha256(run/'carrier/complete.json')}
     freeze(run/'teacher_fp/selected.json',selected)
+    progress['phase']='full_teacher_validation'
     generate_set(run,model,'validation','teacher_wm_validation');_release()
     score(run,['teacher_wm_validation']);_release()
     m=analytic_metrics(run,'teacher_wm_validation',c['validation_n'])
@@ -318,7 +337,9 @@ def campaign(run):
     visuals=paired_pixel_visuals(run,'teacher_clean_validation','teacher_wm_validation',c['validation_n'],max_visuals=16)
     freeze(run/'result/selected_teacher_visuals.json',visuals)
     full={'metrics':m,'quality':q};freeze(run/'result/teacher_quality.json',full)
+    progress['phase']='trajectory_drift'
     trajectory_drift(run,model)
+    progress['phase']='final_report'
     reason=None if m['detection_rate']>=.9 and q['clip_drop']<=.01 and q['paired_lpips']<=.15 else 'Selected teacher failed the frozen full-validation utility/detection gate. Students stopped.'
     finish_report(run,screening,selected,full,reason)
 
@@ -326,6 +347,9 @@ def campaign(run):
 
 def analyze_teacher_only(run):
     """Rebuild the teacher report from verified saved metrics; no model execution."""
+    if not (run/'teacher_complete.json').exists() and (run/'result/replay_failure.json').exists():
+        from semantic_replay_diagnostics import analyze_replay_failure
+        return analyze_replay_failure(run)
     from semantic_report import score_rows
     from semantic_assets import snapshot_identity
     from semantic_sign_report import analytic_metrics
