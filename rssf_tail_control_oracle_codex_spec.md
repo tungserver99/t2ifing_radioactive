@@ -336,6 +336,18 @@ The later imprinting experiment will address whether a model can learn these con
 
 # 10. Mandatory zero-control sanity test
 
+**User-approved amendment, 2026-10-26 (v2 precision policy):** Native-dtype
+replay must still reproduce the cached native final latent exactly on the
+native execution device. The canonical PNG and stored RSSF coordinate checks
+remain mandatory. The separate FP32 optimization graph is not required to
+match the FP16 final latent within the old cross-precision tolerance: measure
+and report its maximum/RMS drift and count outside the unchanged reference
+atol/rtol instead. Finite drift is diagnostic only; nonfinite values abort.
+Do not shift/correct the FP32 graph to match FP16, change quality references,
+or change any final PNG feasibility criterion. Record this policy in a new
+protocol and use a fresh oracle output directory. This amendment supersedes
+cross-precision abort interpretations of sections 10 and 38.1.
+
 Before optimizing any sample:
 
 1. restore its cached boundary PNDM state;
@@ -1243,6 +1255,11 @@ Required tests:
 ## 38.1 Zero-control exactness
 
 With `delta = 0`, oracle replay must reproduce the cached clean final latent under the same scheduler replay tolerances.
+
+Under the approved v2 amendment, this is an identity gate for native-dtype
+replay. FP32/native drift must be measured and reported, not treated as a
+cross-precision identity gate. Include the real ID27 scheduler regression and
+tests proving that native/PNG/RSSF and nonfinite failures still abort.
 
 ## 38.2 Delta gradient
 

@@ -127,6 +127,16 @@ def aggregate_metrics(rows, signs, config):
     for name in ('png_lpips', 'png_pixel_mse'):
         result[f'mean_{name}'] = mean(r[name] for r in rows)
         result[f'median_{name}'] = median(r[name] for r in rows)
+    diagnostics=[r['zero_control'] for r in rows
+                 if r.get('zero_control',{}).get('fp32_graph_drift_is_diagnostic')]
+    result['zero_control_precision_drift']={
+        'policy':'Native replay/PNG/RSSF gates retained; FP32/native drift diagnostic only',
+        'images_with_diagnostics':len(diagnostics),
+        'images_outside_reference_tolerance':sum(d['fp32_graph_latent_outside_reference_tolerance']>0 for d in diagnostics),
+        'elements_outside_reference_tolerance':sum(d['fp32_graph_latent_outside_reference_tolerance'] for d in diagnostics),
+        'latent_elements':sum(d['fp32_graph_latent_elements'] for d in diagnostics),
+        'max_latent_absolute_error':max((d['fp32_graph_latent_max_error'] for d in diagnostics),default=None),
+        'max_latent_rms_error':max((d['fp32_graph_latent_rms_error'] for d in diagnostics),default=None)}
     _finite(result)
     return result
 
@@ -232,9 +242,17 @@ def write_reports(output, rows, frontier_records, source_manifest, protocol, con
     write_json(output/'result/oracle_feasibility.json', aggregate)
     conclusion = ('The result supports proceeding to a separate teacher-imprinting experiment.' if report['status'] == 'oracle_pass' else
                   'The result indicates that the current RSSF per-image carrier should be reconsidered before further teacher optimization.')
+    drift=report['zero_control_precision_drift']
     (output/'result/README.md').write_text(
         '# RSSF control oracle feasibility\n\n'
         'This is a privileged per-image control oracle and not a deployable fingerprinting method.\n\n'
+        'Zero-control policy: native-dtype replay, canonical PNG and stored RSSF coordinate checks remain mandatory. '
+        'FP32/native latent drift is diagnostic only; the FP32 graph is not corrected to match FP16. '
+        'Quality remains relative to the original clean image.\n\n'
+        f"FP32 drift diagnostics: {drift['images_with_diagnostics']}/{len(rows)} images recorded; "
+        f"{drift['images_outside_reference_tolerance']} images outside the unchanged reference tolerance; "
+        f"maximum absolute latent drift: {drift['max_latent_absolute_error']}; "
+        f"maximum per-image latent RMS drift: {drift['max_latent_rms_error']}.\n\n"
         f"Status: **{report['status']}**. Actual PNG oracle feasibility: {report['oracle_feasible_count']}/{len(rows)} "
         f"({report['oracle_feasible_rate']:.2%}); aggregate CLIP drop: {report['aggregate_clip_drop']:.6f}.\n\n"
         'Float optimization feasibility requires K>=24 and the optimization-only top24 margin of 0.02. '

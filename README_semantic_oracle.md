@@ -17,7 +17,7 @@ Activate the existing `wmq` environment and execute from the project directory:
 ```bash
 python -u Malicious_quantization/bitmark_lora/semantic_oracle.py \
   --source-run /shared/homes/u26466553/projects/t2ifing_radioactive/run_semantic_fp_20261024_213309_944621 \
-  --output /shared/homes/u26466553/projects/t2ifing_radioactive/run_rssf_tail_control_oracle_20261026
+  --output /shared/homes/u26466553/projects/t2ifing_radioactive/run_rssf_tail_control_oracle_20261026_v2
 ```
 
 The output is a **separate sibling run**. Never pass the teacher run as output.
@@ -70,17 +70,26 @@ spooling at job completion.
 ## Zero controls and the three image paths
 
 Before optimizing a batch, cached outputs in their original dtype must reproduce
-the original cached native final latent **exactly**. The FP32 scheduler graph's
-zero point is separately checked against that latent using the existing
-latent atol/rtol2e-3. Precision differences are not silently mistaken for oracle
-control changes.
+the original cached native final latent **exactly** on the native execution
+device. Under the user-approved v2 policy, the FP32 scheduler graph's zero point
+is separately measured against that latent. The existing latent atol/rtol2e-3
+is a diagnostic reference, not an abort threshold across different dtypes.
+Logs and per-image JSON record maximum/RMS drift, element count outside that
+reference tolerance and source dtype; the final report aggregates the drift.
+Nonfinite values still abort. No correction is added to the FP32 graph, and
+the quality reference remains the original clean image.
 
 Canonical zero decode uses the clean FP16 VAE and the project's ordinary
 `VaeImageProcessor` PNG convention. Its PNG pixel sanity uses the existing
 2/255+2e-3 limit, and its recomputed normal RSSF coordinates must agree with
 stored clean coordinates at frozen atol/rtol2e-3. These tolerances are recorded
-in `oracle_targets/protocol.json`. A mismatch aborts before that batch is
+in `oracle_targets/protocol.json`. A native replay, PNG or coordinate mismatch aborts before that batch is
 optimized; nothing relaxes a tolerance automatically.
+
+This changes the execution protocol to `rssf_tail_control_oracle_v2_fp32_drift`.
+Use a new output directory, for example `run_rssf_tail_control_oracle_20261026_v2`;
+do not resume the v1 directory with v2 code. The historical teacher source remains
+unchanged. Repeat the v2 command with its same output to resume interrupted v2 batches.
 
 During optimization, quality uses the original float image and FP32 float
 reference. Detector coordinates use the STE RGB8 view. The STE forward matches

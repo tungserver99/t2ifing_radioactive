@@ -42,6 +42,77 @@ def test_dynamic_current_top24_and_safe_bits():
     assert loss.item()==0 and new['feasible'].item()
 
 
+def test_fp32_drift_diagnostics_reproduce_server_failing_element():
+    from semantic_oracle_math import precision_drift
+    # Actual ID27, channel1,row39,column0. FP64 agrees with FP32, not FP16.
+    original=torch.tensor([-2.015625],dtype=torch.float16)
+    fp32=torch.tensor([-2.021880865097046],dtype=torch.float32)
+    report=precision_drift(fp32,original,atol=.002,rtol=.002)
+    assert report['fp32_graph_latent_outside_reference_tolerance']==1
+    assert report['fp32_graph_latent_elements']==1
+    assert report['fp32_graph_latent_max_error']==pytest.approx(.006255865097046)
+    assert report['fp32_graph_latent_rms_error']==pytest.approx(.006255865097046)
+    assert report['source_latent_dtype']=='torch.float16'
+    assert report['fp32_graph_drift_is_diagnostic'] is True
+    with pytest.raises(ValueError,match='Nonfinite'):
+        precision_drift(fp32*float('nan'),original,atol=.002,rtol=.002)
+
+
+def test_real_id27_scheduler_fixture_reproduces_drift_and_preserves_control_gradients():
+    import json
+    from pathlib import Path
+    from diffusers import PNDMScheduler
+    from semantic_trajectory import unpack_tree
+    from semantic_oracle_math import replay_controls,precision_drift
+    data=json.loads((Path(__file__).parent/'fixtures/oracle_fp32_drift_id27.json').read_text())
+    tensors={k:torch.tensor(v['values'],dtype=getattr(torch,v['dtype'])) for k,v in data['tensors'].items()}
+    record=unpack_tree(data['state'],tensors)
+    factory=lambda:PNDMScheduler.from_config(data['scheduler_config'])
+    fp32=replay_controls(factory,record,device='cpu',dtype=torch.float32)
+    fp64=replay_controls(factory,record,device='cpu',dtype=torch.float64)
+    diagnostics=precision_drift(fp32,record['final_latent'],atol=.002,rtol=.002)
+    assert diagnostics['fp32_graph_latent_outside_reference_tolerance']==1
+    assert fp32[0,1,0,0].item()==pytest.approx(-2.021880865097046,abs=1e-6)
+    assert float((fp32.double()-fp64).abs().max())<1e-6
+    delta=torch.zeros_like(record['tail_outputs'],dtype=torch.float32,requires_grad=True)
+    controlled=replay_controls(factory,record,delta,device='cpu',dtype=torch.float32)
+    torch.testing.assert_close(controlled,fp32,atol=0,rtol=0)
+    controlled.square().sum().backward()
+    assert all(torch.isfinite(delta.grad[i]).all() and delta.grad[i].abs().sum()>0 for i in range(4))
+
+
+@pytest.mark.parametrize('failure',[None,'native','png','coordinates','nonfinite'])
+def test_begin_batch_reports_fp32_drift_but_retains_native_png_coordinate_gates(monkeypatch,failure):
+    import semantic_oracle as oracle
+    import semantic_teacher
+    import semantic_sign_train
+    from PIL import Image
+    factory,record=_record()
+    backend=oracle.FrozenOracleBackend.__new__(oracle.FrozenOracleBackend)
+    backend.device='cpu';backend.root=__import__('pathlib').Path('.')
+    backend.factory=factory
+    backend.source={'prompts':{'train':[{'text':'test'}]},'scores':[{'coordinates':[0.]*32}]}
+    backend.ext=SimpleNamespace(text=lambda prompts:torch.zeros(1,2,8),
+        encode_image=lambda image,prompts:torch.ones(1,32) if failure=='coordinates' else torch.zeros(1,32))
+    backend.carrier=SimpleNamespace(coordinates=lambda x:x)
+    backend.canonical_images=lambda latent:[Image.new('RGB',(3,3),(255,255,255) if failure=='png' else (128,128,128))]
+    monkeypatch.setattr(semantic_teacher,'pixels',lambda paths:torch.full((1,3,3,3),128/127.5-1))
+    monkeypatch.setattr(semantic_sign_train,'decoded_image',lambda ext,z:z)
+    def replay(factory,rec,device,dtype=None):
+        value=rec['final_latent'].clone()
+        if dtype is not None:return value.float()+(float('nan') if failure=='nonfinite' else .1)
+        return value+(1. if failure=='native' else 0.)
+    monkeypatch.setattr(oracle,'replay_controls',replay)
+    if failure is not None:
+        with pytest.raises((AssertionError,ValueError)):
+            backend.begin_batch([0],[record])
+    else:
+        assert len(backend.begin_batch([0],[record]))==1
+        assert backend.zero[0]['fp32_graph_latent_outside_reference_tolerance']>0
+        assert backend.zero[0]['native_latent_max_error']==0
+        torch.testing.assert_close(backend.reference[0],record['final_latent'])
+
+
 def test_ste_matches_actual_diffusers_png_roundtrip_and_identity_gradient(tmp_path):
     from diffusers.image_processor import VaeImageProcessor
     from PIL import Image

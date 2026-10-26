@@ -1,0 +1,1452 @@
+{
+  "source_image_id": 27,
+  "spatial_pixel": [
+    39,
+    0
+  ],
+  "source_bundle_sha256": "e9f49f0b87fcd9f21135dbaacdf026c0f1b9f24e27b39350f486eb8cac6a74c2",
+  "scheduler_config": {
+    "_class_name": "PNDMScheduler",
+    "_diffusers_version": "0.10.0.dev0",
+    "beta_end": 0.012,
+    "beta_schedule": "scaled_linear",
+    "beta_start": 0.00085,
+    "clip_sample": false,
+    "num_train_timesteps": 1000,
+    "prediction_type": "epsilon",
+    "set_alpha_to_one": false,
+    "skip_prk_steps": true,
+    "steps_offset": 1,
+    "trained_betas": null
+  },
+  "state": {
+    "dict": {
+      "protocol": {
+        "dict": {
+          "scheduler_class": {
+            "scalar": "PNDMScheduler"
+          },
+          "scheduler_config": {
+            "dict": {
+              "num_train_timesteps": {
+                "scalar": 1000
+              },
+              "beta_start": {
+                "scalar": 0.00085
+              },
+              "beta_end": {
+                "scalar": 0.012
+              },
+              "beta_schedule": {
+                "scalar": "scaled_linear"
+              },
+              "trained_betas": {
+                "scalar": null
+              },
+              "skip_prk_steps": {
+                "scalar": true
+              },
+              "set_alpha_to_one": {
+                "scalar": false
+              },
+              "prediction_type": {
+                "scalar": "epsilon"
+              },
+              "timestep_spacing": {
+                "scalar": "leading"
+              },
+              "steps_offset": {
+                "scalar": 1
+              },
+              "clip_sample": {
+                "scalar": false
+              }
+            }
+          },
+          "scheduler_config_hash": {
+            "scalar": "57b31d1b4f8d6547a0d07958204f11136623d60a53a2f8fc34ae513939fdefaa"
+          },
+          "timesteps": {
+            "list": [
+              {
+                "scalar": 981
+              },
+              {
+                "scalar": 961
+              },
+              {
+                "scalar": 961
+              },
+              {
+                "scalar": 941
+              },
+              {
+                "scalar": 921
+              },
+              {
+                "scalar": 901
+              },
+              {
+                "scalar": 881
+              },
+              {
+                "scalar": 861
+              },
+              {
+                "scalar": 841
+              },
+              {
+                "scalar": 821
+              },
+              {
+                "scalar": 801
+              },
+              {
+                "scalar": 781
+              },
+              {
+                "scalar": 761
+              },
+              {
+                "scalar": 741
+              },
+              {
+                "scalar": 721
+              },
+              {
+                "scalar": 701
+              },
+              {
+                "scalar": 681
+              },
+              {
+                "scalar": 661
+              },
+              {
+                "scalar": 641
+              },
+              {
+                "scalar": 621
+              },
+              {
+                "scalar": 601
+              },
+              {
+                "scalar": 581
+              },
+              {
+                "scalar": 561
+              },
+              {
+                "scalar": 541
+              },
+              {
+                "scalar": 521
+              },
+              {
+                "scalar": 501
+              },
+              {
+                "scalar": 481
+              },
+              {
+                "scalar": 461
+              },
+              {
+                "scalar": 441
+              },
+              {
+                "scalar": 421
+              },
+              {
+                "scalar": 401
+              },
+              {
+                "scalar": 381
+              },
+              {
+                "scalar": 361
+              },
+              {
+                "scalar": 341
+              },
+              {
+                "scalar": 321
+              },
+              {
+                "scalar": 301
+              },
+              {
+                "scalar": 281
+              },
+              {
+                "scalar": 261
+              },
+              {
+                "scalar": 241
+              },
+              {
+                "scalar": 221
+              },
+              {
+                "scalar": 201
+              },
+              {
+                "scalar": 181
+              },
+              {
+                "scalar": 161
+              },
+              {
+                "scalar": 141
+              },
+              {
+                "scalar": 121
+              },
+              {
+                "scalar": 101
+              },
+              {
+                "scalar": 81
+              },
+              {
+                "scalar": 61
+              },
+              {
+                "scalar": 41
+              },
+              {
+                "scalar": 21
+              },
+              {
+                "scalar": 1
+              }
+            ]
+          },
+          "num_inference_steps": {
+            "scalar": 50
+          }
+        }
+      },
+      "call_count": {
+        "scalar": 51
+      },
+      "boundary_index": {
+        "scalar": 47
+      },
+      "anchor_indices": {
+        "list": [
+          {
+            "scalar": 0
+          },
+          {
+            "scalar": 12
+          },
+          {
+            "scalar": 23
+          },
+          {
+            "scalar": 34
+          },
+          {
+            "scalar": 46
+          }
+        ]
+      },
+      "anchor_timesteps": {
+        "list": [
+          {
+            "scalar": 981
+          },
+          {
+            "scalar": 761
+          },
+          {
+            "scalar": 541
+          },
+          {
+            "scalar": 321
+          },
+          {
+            "scalar": 81
+          }
+        ]
+      },
+      "anchor_latents": {
+        "tensor": "record.anchor_latents",
+        "shape": [
+          5,
+          4,
+          1,
+          1
+        ],
+        "dtype": "torch.float16"
+      },
+      "anchor_predictions": {
+        "tensor": "record.anchor_predictions",
+        "shape": [
+          5,
+          4,
+          1,
+          1
+        ],
+        "dtype": "torch.float16"
+      },
+      "boundary_latent": {
+        "tensor": "record.boundary_latent",
+        "shape": [
+          1,
+          4,
+          1,
+          1
+        ],
+        "dtype": "torch.float16"
+      },
+      "boundary_state": {
+        "dict": {
+          "counter": {
+            "scalar": 47
+          },
+          "ets": {
+            "list": [
+              {
+                "tensor": "record.boundary_state.ets.0",
+                "shape": [
+                  1,
+                  4,
+                  1,
+                  1
+                ],
+                "dtype": "torch.float16"
+              },
+              {
+                "tensor": "record.boundary_state.ets.1",
+                "shape": [
+                  1,
+                  4,
+                  1,
+                  1
+                ],
+                "dtype": "torch.float16"
+              },
+              {
+                "tensor": "record.boundary_state.ets.2",
+                "shape": [
+                  1,
+                  4,
+                  1,
+                  1
+                ],
+                "dtype": "torch.float16"
+              },
+              {
+                "tensor": "record.boundary_state.ets.3",
+                "shape": [
+                  1,
+                  4,
+                  1,
+                  1
+                ],
+                "dtype": "torch.float16"
+              }
+            ]
+          },
+          "cur_model_output": {
+            "scalar": 0
+          },
+          "cur_sample": {
+            "scalar": null
+          },
+          "num_inference_steps": {
+            "scalar": 50
+          },
+          "timesteps": {
+            "tensor": "record.boundary_state.timesteps",
+            "shape": [
+              51
+            ],
+            "dtype": "torch.int64"
+          },
+          "_timesteps": {
+            "ndarray": {
+              "tensor": "record.boundary_state._timesteps",
+              "shape": [
+                50
+              ],
+              "dtype": "torch.int64"
+            }
+          },
+          "prk_timesteps": {
+            "ndarray": {
+              "tensor": "record.boundary_state.prk_timesteps",
+              "shape": [
+                0
+              ],
+              "dtype": "torch.float64"
+            }
+          },
+          "plms_timesteps": {
+            "ndarray": {
+              "tensor": "record.boundary_state.plms_timesteps",
+              "shape": [
+                51
+              ],
+              "dtype": "torch.int64"
+            }
+          }
+        }
+      },
+      "tail_outputs": {
+        "tensor": "record.tail_outputs",
+        "shape": [
+          4,
+          4,
+          1,
+          1
+        ],
+        "dtype": "torch.float16"
+      },
+      "final_latent": {
+        "tensor": "record.final_latent",
+        "shape": [
+          1,
+          4,
+          1,
+          1
+        ],
+        "dtype": "torch.float16"
+      },
+      "final_state": {
+        "dict": {
+          "counter": {
+            "scalar": 51
+          },
+          "ets": {
+            "list": [
+              {
+                "tensor": "record.final_state.ets.0",
+                "shape": [
+                  1,
+                  4,
+                  1,
+                  1
+                ],
+                "dtype": "torch.float16"
+              },
+              {
+                "tensor": "record.final_state.ets.1",
+                "shape": [
+                  1,
+                  4,
+                  1,
+                  1
+                ],
+                "dtype": "torch.float16"
+              },
+              {
+                "tensor": "record.final_state.ets.2",
+                "shape": [
+                  1,
+                  4,
+                  1,
+                  1
+                ],
+                "dtype": "torch.float16"
+              },
+              {
+                "tensor": "record.final_state.ets.3",
+                "shape": [
+                  1,
+                  4,
+                  1,
+                  1
+                ],
+                "dtype": "torch.float16"
+              }
+            ]
+          },
+          "cur_model_output": {
+            "scalar": 0
+          },
+          "cur_sample": {
+            "scalar": null
+          },
+          "num_inference_steps": {
+            "scalar": 50
+          },
+          "timesteps": {
+            "tensor": "record.final_state.timesteps",
+            "shape": [
+              51
+            ],
+            "dtype": "torch.int64"
+          },
+          "_timesteps": {
+            "ndarray": {
+              "tensor": "record.final_state._timesteps",
+              "shape": [
+                50
+              ],
+              "dtype": "torch.int64"
+            }
+          },
+          "prk_timesteps": {
+            "ndarray": {
+              "tensor": "record.final_state.prk_timesteps",
+              "shape": [
+                0
+              ],
+              "dtype": "torch.float64"
+            }
+          },
+          "plms_timesteps": {
+            "ndarray": {
+              "tensor": "record.final_state.plms_timesteps",
+              "shape": [
+                51
+              ],
+              "dtype": "torch.int64"
+            }
+          }
+        }
+      }
+    }
+  },
+  "tensors": {
+    "record.anchor_latents": {
+      "dtype": "float16",
+      "values": [
+        [
+          [
+            [
+              -0.1519775390625
+            ]
+          ],
+          [
+            [
+              -1.12109375
+            ]
+          ],
+          [
+            [
+              0.61767578125
+            ]
+          ],
+          [
+            [
+              1.2841796875
+            ]
+          ]
+        ],
+        [
+          [
+            [
+              -0.1910400390625
+            ]
+          ],
+          [
+            [
+              -1.1318359375
+            ]
+          ],
+          [
+            [
+              0.51904296875
+            ]
+          ],
+          [
+            [
+              1.2509765625
+            ]
+          ]
+        ],
+        [
+          [
+            [
+              -0.1309814453125
+            ]
+          ],
+          [
+            [
+              -1.240234375
+            ]
+          ],
+          [
+            [
+              0.396484375
+            ]
+          ],
+          [
+            [
+              1.1181640625
+            ]
+          ]
+        ],
+        [
+          [
+            [
+              -0.188720703125
+            ]
+          ],
+          [
+            [
+              -1.59375
+            ]
+          ],
+          [
+            [
+              0.381591796875
+            ]
+          ],
+          [
+            [
+              0.853515625
+            ]
+          ]
+        ],
+        [
+          [
+            [
+              -0.409912109375
+            ]
+          ],
+          [
+            [
+              -1.998046875
+            ]
+          ],
+          [
+            [
+              0.52197265625
+            ]
+          ],
+          [
+            [
+              0.68701171875
+            ]
+          ]
+        ]
+      ]
+    },
+    "record.anchor_predictions": {
+      "dtype": "float16",
+      "values": [
+        [
+          [
+            [
+              -0.1204833984375
+            ]
+          ],
+          [
+            [
+              -1.154296875
+            ]
+          ],
+          [
+            [
+              0.6435546875
+            ]
+          ],
+          [
+            [
+              1.322265625
+            ]
+          ]
+        ],
+        [
+          [
+            [
+              -0.1943359375
+            ]
+          ],
+          [
+            [
+              -1.1025390625
+            ]
+          ],
+          [
+            [
+              0.6708984375
+            ]
+          ],
+          [
+            [
+              1.3232421875
+            ]
+          ]
+        ],
+        [
+          [
+            [
+              -0.2568359375
+            ]
+          ],
+          [
+            [
+              -0.88818359375
+            ]
+          ],
+          [
+            [
+              0.505859375
+            ]
+          ],
+          [
+            [
+              1.2705078125
+            ]
+          ]
+        ],
+        [
+          [
+            [
+              0.47802734375
+            ]
+          ],
+          [
+            [
+              0.15185546875
+            ]
+          ],
+          [
+            [
+              -0.0772705078125
+            ]
+          ],
+          [
+            [
+              1.0546875
+            ]
+          ]
+        ],
+        [
+          [
+            [
+              0.13818359375
+            ]
+          ],
+          [
+            [
+              -0.26318359375
+            ]
+          ],
+          [
+            [
+              0.290283203125
+            ]
+          ],
+          [
+            [
+              0.5966796875
+            ]
+          ]
+        ]
+      ]
+    },
+    "record.boundary_latent": {
+      "dtype": "float16",
+      "values": [
+        [
+          [
+            [
+              -0.42333984375
+            ]
+          ],
+          [
+            [
+              -2.01171875
+            ]
+          ],
+          [
+            [
+              0.515625
+            ]
+          ],
+          [
+            [
+              0.66845703125
+            ]
+          ]
+        ]
+      ]
+    },
+    "record.boundary_state.ets.0": {
+      "dtype": "float16",
+      "values": [
+        [
+          [
+            [
+              0.11968994140625
+            ]
+          ],
+          [
+            [
+              -0.2900390625
+            ]
+          ],
+          [
+            [
+              0.0841064453125
+            ]
+          ],
+          [
+            [
+              0.599609375
+            ]
+          ]
+        ]
+      ]
+    },
+    "record.boundary_state.ets.1": {
+      "dtype": "float16",
+      "values": [
+        [
+          [
+            [
+              0.14697265625
+            ]
+          ],
+          [
+            [
+              -0.2822265625
+            ]
+          ],
+          [
+            [
+              0.130126953125
+            ]
+          ],
+          [
+            [
+              0.60205078125
+            ]
+          ]
+        ]
+      ]
+    },
+    "record.boundary_state.ets.2": {
+      "dtype": "float16",
+      "values": [
+        [
+          [
+            [
+              0.130126953125
+            ]
+          ],
+          [
+            [
+              -0.28271484375
+            ]
+          ],
+          [
+            [
+              0.225341796875
+            ]
+          ],
+          [
+            [
+              0.6025390625
+            ]
+          ]
+        ]
+      ]
+    },
+    "record.boundary_state.ets.3": {
+      "dtype": "float16",
+      "values": [
+        [
+          [
+            [
+              0.13818359375
+            ]
+          ],
+          [
+            [
+              -0.26318359375
+            ]
+          ],
+          [
+            [
+              0.290283203125
+            ]
+          ],
+          [
+            [
+              0.5966796875
+            ]
+          ]
+        ]
+      ]
+    },
+    "record.boundary_state.timesteps": {
+      "dtype": "int64",
+      "values": [
+        981,
+        961,
+        961,
+        941,
+        921,
+        901,
+        881,
+        861,
+        841,
+        821,
+        801,
+        781,
+        761,
+        741,
+        721,
+        701,
+        681,
+        661,
+        641,
+        621,
+        601,
+        581,
+        561,
+        541,
+        521,
+        501,
+        481,
+        461,
+        441,
+        421,
+        401,
+        381,
+        361,
+        341,
+        321,
+        301,
+        281,
+        261,
+        241,
+        221,
+        201,
+        181,
+        161,
+        141,
+        121,
+        101,
+        81,
+        61,
+        41,
+        21,
+        1
+      ]
+    },
+    "record.boundary_state._timesteps": {
+      "dtype": "int64",
+      "values": [
+        1,
+        21,
+        41,
+        61,
+        81,
+        101,
+        121,
+        141,
+        161,
+        181,
+        201,
+        221,
+        241,
+        261,
+        281,
+        301,
+        321,
+        341,
+        361,
+        381,
+        401,
+        421,
+        441,
+        461,
+        481,
+        501,
+        521,
+        541,
+        561,
+        581,
+        601,
+        621,
+        641,
+        661,
+        681,
+        701,
+        721,
+        741,
+        761,
+        781,
+        801,
+        821,
+        841,
+        861,
+        881,
+        901,
+        921,
+        941,
+        961,
+        981
+      ]
+    },
+    "record.boundary_state.prk_timesteps": {
+      "dtype": "float64",
+      "values": []
+    },
+    "record.boundary_state.plms_timesteps": {
+      "dtype": "int64",
+      "values": [
+        981,
+        961,
+        961,
+        941,
+        921,
+        901,
+        881,
+        861,
+        841,
+        821,
+        801,
+        781,
+        761,
+        741,
+        721,
+        701,
+        681,
+        661,
+        641,
+        621,
+        601,
+        581,
+        561,
+        541,
+        521,
+        501,
+        481,
+        461,
+        441,
+        421,
+        401,
+        381,
+        361,
+        341,
+        321,
+        301,
+        281,
+        261,
+        241,
+        221,
+        201,
+        181,
+        161,
+        141,
+        121,
+        101,
+        81,
+        61,
+        41,
+        21,
+        1
+      ]
+    },
+    "record.tail_outputs": {
+      "dtype": "float16",
+      "values": [
+        [
+          [
+            [
+              0.11669921875
+            ]
+          ],
+          [
+            [
+              -0.2666015625
+            ]
+          ],
+          [
+            [
+              0.37451171875
+            ]
+          ],
+          [
+            [
+              0.55419921875
+            ]
+          ]
+        ],
+        [
+          [
+            [
+              0.0955810546875
+            ]
+          ],
+          [
+            [
+              -0.262451171875
+            ]
+          ],
+          [
+            [
+              0.427490234375
+            ]
+          ],
+          [
+            [
+              0.52783203125
+            ]
+          ]
+        ],
+        [
+          [
+            [
+              0.04632568359375
+            ]
+          ],
+          [
+            [
+              -0.245849609375
+            ]
+          ],
+          [
+            [
+              0.4638671875
+            ]
+          ],
+          [
+            [
+              0.41748046875
+            ]
+          ]
+        ],
+        [
+          [
+            [
+              -0.0408935546875
+            ]
+          ],
+          [
+            [
+              -0.1099853515625
+            ]
+          ],
+          [
+            [
+              0.149658203125
+            ]
+          ],
+          [
+            [
+              0.135986328125
+            ]
+          ]
+        ]
+      ]
+    },
+    "record.final_latent": {
+      "dtype": "float16",
+      "values": [
+        [
+          [
+            [
+              -0.44482421875
+            ]
+          ],
+          [
+            [
+              -2.015625
+            ]
+          ],
+          [
+            [
+              0.439208984375
+            ]
+          ],
+          [
+            [
+              0.603515625
+            ]
+          ]
+        ]
+      ]
+    },
+    "record.final_state.ets.0": {
+      "dtype": "float16",
+      "values": [
+        [
+          [
+            [
+              0.11669921875
+            ]
+          ],
+          [
+            [
+              -0.2666015625
+            ]
+          ],
+          [
+            [
+              0.37451171875
+            ]
+          ],
+          [
+            [
+              0.55419921875
+            ]
+          ]
+        ]
+      ]
+    },
+    "record.final_state.ets.1": {
+      "dtype": "float16",
+      "values": [
+        [
+          [
+            [
+              0.0955810546875
+            ]
+          ],
+          [
+            [
+              -0.262451171875
+            ]
+          ],
+          [
+            [
+              0.427490234375
+            ]
+          ],
+          [
+            [
+              0.52783203125
+            ]
+          ]
+        ]
+      ]
+    },
+    "record.final_state.ets.2": {
+      "dtype": "float16",
+      "values": [
+        [
+          [
+            [
+              0.04632568359375
+            ]
+          ],
+          [
+            [
+              -0.245849609375
+            ]
+          ],
+          [
+            [
+              0.4638671875
+            ]
+          ],
+          [
+            [
+              0.41748046875
+            ]
+          ]
+        ]
+      ]
+    },
+    "record.final_state.ets.3": {
+      "dtype": "float16",
+      "values": [
+        [
+          [
+            [
+              -0.0408935546875
+            ]
+          ],
+          [
+            [
+              -0.1099853515625
+            ]
+          ],
+          [
+            [
+              0.149658203125
+            ]
+          ],
+          [
+            [
+              0.135986328125
+            ]
+          ]
+        ]
+      ]
+    },
+    "record.final_state.timesteps": {
+      "dtype": "int64",
+      "values": [
+        981,
+        961,
+        961,
+        941,
+        921,
+        901,
+        881,
+        861,
+        841,
+        821,
+        801,
+        781,
+        761,
+        741,
+        721,
+        701,
+        681,
+        661,
+        641,
+        621,
+        601,
+        581,
+        561,
+        541,
+        521,
+        501,
+        481,
+        461,
+        441,
+        421,
+        401,
+        381,
+        361,
+        341,
+        321,
+        301,
+        281,
+        261,
+        241,
+        221,
+        201,
+        181,
+        161,
+        141,
+        121,
+        101,
+        81,
+        61,
+        41,
+        21,
+        1
+      ]
+    },
+    "record.final_state._timesteps": {
+      "dtype": "int64",
+      "values": [
+        1,
+        21,
+        41,
+        61,
+        81,
+        101,
+        121,
+        141,
+        161,
+        181,
+        201,
+        221,
+        241,
+        261,
+        281,
+        301,
+        321,
+        341,
+        361,
+        381,
+        401,
+        421,
+        441,
+        461,
+        481,
+        501,
+        521,
+        541,
+        561,
+        581,
+        601,
+        621,
+        641,
+        661,
+        681,
+        701,
+        721,
+        741,
+        761,
+        781,
+        801,
+        821,
+        841,
+        861,
+        881,
+        901,
+        921,
+        941,
+        961,
+        981
+      ]
+    },
+    "record.final_state.prk_timesteps": {
+      "dtype": "float64",
+      "values": []
+    },
+    "record.final_state.plms_timesteps": {
+      "dtype": "int64",
+      "values": [
+        981,
+        961,
+        961,
+        941,
+        921,
+        901,
+        881,
+        861,
+        841,
+        821,
+        801,
+        781,
+        761,
+        741,
+        721,
+        701,
+        681,
+        661,
+        641,
+        621,
+        601,
+        581,
+        561,
+        541,
+        521,
+        501,
+        481,
+        461,
+        441,
+        421,
+        401,
+        381,
+        361,
+        341,
+        321,
+        301,
+        281,
+        261,
+        241,
+        221,
+        201,
+        181,
+        161,
+        141,
+        121,
+        101,
+        81,
+        61,
+        41,
+        21,
+        1
+      ]
+    }
+  }
+}

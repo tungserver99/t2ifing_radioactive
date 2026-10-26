@@ -34,6 +34,22 @@ def row(i, k=24, lpips=.1, clip_drop=.005, float_feasible=True):
 
 
 class OracleReportTests(unittest.TestCase):
+    def test_fp32_drift_is_visible_and_does_not_change_png_verdict(self):
+        rows=[row(0),row(1)]
+        for i,item in enumerate(rows):
+            item['zero_control']={'fp32_graph_latent_max_error':.006 if i else .001,
+                'fp32_graph_latent_rms_error':.0006,
+                'fp32_graph_latent_outside_reference_tolerance':i,
+                'fp32_graph_latent_elements':16384,
+                'fp32_graph_drift_is_diagnostic':True}
+        report=aggregate_metrics(rows,SIGNS,{'oracle_n':2})
+        self.assertEqual(report['status'],'oracle_pass')
+        summary=report['zero_control_precision_drift']
+        self.assertEqual(summary['images_with_diagnostics'],2)
+        self.assertEqual(summary['images_outside_reference_tolerance'],1)
+        self.assertEqual(summary['elements_outside_reference_tolerance'],1)
+        self.assertEqual(summary['max_latent_absolute_error'],.006)
+
     def test_canonical_float32_model_mean_tie_and_saved_clean_score_tolerance(self):
         rows = [row(i, 32) for i in range(3)]
         for item, first_coordinate in zip(rows, [1.e8, -1., -1.e8]):

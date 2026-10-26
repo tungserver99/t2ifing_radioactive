@@ -5,7 +5,7 @@ from semantic_carrier import check_finite
 from semantic_sign import image_bits
 from semantic_trajectory import restore_scheduler,replay_tail
 
-ORACLE_CONFIG=dict(oracle_version='rssf_tail_control_oracle_v1',oracle_n=256,oracle_seed=20261026,
+ORACLE_CONFIG=dict(oracle_version='rssf_tail_control_oracle_v2_fp32_drift',oracle_n=256,oracle_seed=20261026,
     oracle_batch_size=4,oracle_steps=120,oracle_lr=.03,optimizer='Adam',tail_calls=4,K_detect=24,
     oracle_bit_margin=.02,w_det_start=1.,w_det_double_every=20,w_det_max=32.,lambda_lpips=1.,
     lambda_pixel=1.,lambda_delta_relative=.01,final_png_lpips_max=.15,aggregate_clip_drop_max=.01,
@@ -74,6 +74,26 @@ def replay_controls(factory,record,delta=None,device='cuda',dtype=None):
     if counter[0]!=4:raise ValueError('Oracle changed the native tail call count')
     check_finite(final)
     return final
+
+
+@torch.no_grad()
+def precision_drift(fp32,original,atol,rtol):
+    """Measure cross-precision drift; only native replay is an identity gate.
+
+    The FP32 zero-control graph is intentionally not shifted to fit FP16 data.
+    Reference tolerances are reported unchanged, never enlarged automatically.
+    """
+    check_finite(fp32,original)
+    if fp32.shape!=original.shape or not fp32.numel():
+        raise ValueError('Precision diagnostic requires matching nonempty latents')
+    error=(fp32.double()-original.double()).abs()
+    limit=atol+rtol*original.double().abs()
+    return {'fp32_graph_latent_max_error':float(error.max()),
+            'fp32_graph_latent_rms_error':float(error.square().mean().sqrt()),
+            'fp32_graph_latent_outside_reference_tolerance':int((error>limit).sum()),
+            'fp32_graph_latent_elements':error.numel(),
+            'source_latent_dtype':str(original.dtype),
+            'fp32_graph_drift_is_diagnostic':True}
 
 
 def detector_weights(weights,ever_feasible,step):
