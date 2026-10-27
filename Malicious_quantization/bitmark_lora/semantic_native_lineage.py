@@ -1,7 +1,7 @@
 """Fail-closed v2 checkpoint-100 lineage and immutable v3 preparation."""
 import importlib.metadata
 import shutil
-import subprocess
+import re
 from pathlib import Path
 import torch
 from common import HERE, read_json, freeze, sha256, image_name
@@ -140,9 +140,45 @@ def copy_immutable(source,target):
             shutil.copyfile(source,temporary); temporary.replace(target)
 
 
+def repository_head(root):
+    """Best-effort provenance from Git metadata; never invoke a Git executable.
+
+    Copied/exported PBS deployments may have no metadata at all. In that case
+    content hashes remain authoritative and the unavailable commit is JSON null.
+    """
+    try:
+        git=Path(root)/'.git'
+        if git.is_file():
+            pointer=git.read_text(encoding='utf8').strip()
+            if not pointer.startswith('gitdir: '):return None
+            git=(Path(root)/pointer[8:]).resolve()
+        head=(git/'HEAD').read_text(encoding='utf8').strip()
+        if head.startswith('ref: '):
+            reference=head[5:]
+            if not reference.startswith('refs/') or '..' in reference.split('/'):return None
+            common=git
+            if (git/'commondir').is_file():
+                common=(git/(git/'commondir').read_text(encoding='utf8').strip()).resolve()
+            for directory in dict.fromkeys((git,common)):
+                loose=directory/reference
+                if loose.is_file():
+                    head=loose.read_text(encoding='utf8').strip()
+                    break
+                packed=directory/'packed-refs'
+                if packed.is_file():
+                    match=next((line.split()[0] for line in packed.read_text(encoding='utf8').splitlines()
+                                if len(line.split())==2 and line.split()[1]==reference),None)
+                    if match:
+                        head=match
+                        break
+        return head if re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}',head) else None
+    except (OSError,UnicodeError,ValueError):
+        return None
+
+
 def code_identity():
     root=HERE.parent.parent
-    head=subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip()
+    head=repository_head(root)
     return {'git_head':head,'files':{p.relative_to(root).as_posix():sha256(p)
              for p in sorted(HERE.glob('*.py'))},
             'launcher_sha256':sha256(root/'run_rssf_native_margin.sh'),

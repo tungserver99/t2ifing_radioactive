@@ -1,4 +1,4 @@
-﻿# RSSF v3 native margin refinement
+# RSSF v3 native margin refinement
 
 This campaign implements `GPT_guide/rssf_native_margin_refinement_student_distill_codex_spec.md` independently of the historical trajectory and oracle launchers.
 
@@ -24,6 +24,8 @@ Selection uses actual native FP16 PNGs on the first 256 source validation rows. 
 
 The SD1.4 student sees only ordinary RGB/caption data and standard denoising training arguments. Student selection freezes minimum held-out denoising MSE (earlier step on exact ties), before any detector/utility/test scoring. Frozen test generation starts after both student selections. Owner-key metrics and wrong-key controls use saved actual-PNG coordinates and the unchanged RSSF verifier.
 
-Outputs include `source_lineage.json`, runtime Git HEAD plus content hashes in `code_manifest.json`, `teacher_fp/native_margin_refine/`, `result/teacher_screening.json`, `result/teacher_full_validation.json`, `result/student_selection/`, `result/final_rssf.json`, `result/final_lpips.json`, `result/utility.json`, deterministic visual panels and `result/README.md`. Stage subprocess logs are in `logs/`; a subprocess error's traceback is in its corresponding log.
+Outputs include `source_lineage.json`, runtime content hashes plus optional Git HEAD in `code_manifest.json`, `teacher_fp/native_margin_refine/`, `result/teacher_screening.json`, `result/teacher_full_validation.json`, `result/student_selection/`, `result/final_rssf.json`, `result/final_lpips.json`, `result/utility.json`, deterministic visual panels and `result/README.md`. Stage subprocess logs are in `logs/`; a subprocess error's traceback is in its corresponding log.
 
 Local validation was deliberately limited to syntax and small synthetic CPU contracts in `test_semantic_native_margin.py` using the topmost environment. The actual-model CUDA integration gates have not been run on this CPU-only machine and must pass on the server before training.
+
+PBS execution requires no Git executable and works without a `.git` directory. Commit provenance is read directly from available Git metadata; otherwise `git_head` is `null`. File hashes remain mandatory and enforce unchanged code on resume. After the reported missing-Git preparation failure, update the project files and resubmit the same PBS script/output directory; no run deletion or new environment setup is needed.
