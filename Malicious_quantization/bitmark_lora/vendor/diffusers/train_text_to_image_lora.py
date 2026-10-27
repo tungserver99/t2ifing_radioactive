@@ -429,6 +429,7 @@ def parse_args():
     )
 
     parser.add_argument("--snapshot_steps", type=int, nargs="+", default=[])
+    parser.add_argument("--require_applied_updates", action="store_true", help="Count actual updates and save audited resumable state (v3)")
     parser.add_argument("--use_dora", action="store_true", help="Use PEFT magnitude/direction adaptation")
     parser.add_argument("--adapter_scope", choices=["attention", "attention_conv"], default="attention")
     args = parser.parse_args()
@@ -801,11 +802,18 @@ def main():
     logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) = {total_batch_size}")
     logger.info(f"  Gradient Accumulation steps = {args.gradient_accumulation_steps}")
     logger.info(f"  Total optimization steps = {args.max_train_steps}")
+    if args.require_applied_updates and train_dataloader.generator is None:
+        generator=torch.Generator().manual_seed(args.seed)
+        train_dataloader.generator=generator
+        if hasattr(train_dataloader.sampler,'generator'):train_dataloader.sampler.generator=generator
+        if hasattr(train_dataloader.batch_sampler,'sampler') and hasattr(train_dataloader.batch_sampler.sampler,'generator'):
+            train_dataloader.batch_sampler.sampler.generator=generator
     global_step = 0
     attempted_updates, skipped_updates = 0, 0
     first_epoch = 0
 
     # Potentially load in the weights and states from a previous save
+    resume_epoch = resume_batch = 0
     if args.resume_from_checkpoint:
         if args.resume_from_checkpoint != "latest":
             path = os.path.basename(args.resume_from_checkpoint)
@@ -813,6 +821,8 @@ def main():
             # Get the most recent checkpoint
             dirs = os.listdir(args.output_dir)
             dirs = [d for d in dirs if d.startswith("checkpoint")]
+            if args.require_applied_updates:
+                dirs = [d for d in dirs if os.path.isfile(os.path.join(args.output_dir,d,"v3_resume.json"))]
             dirs = sorted(dirs, key=lambda x: int(x.split("-")[1]))
             path = dirs[-1] if len(dirs) > 0 else None
 
@@ -824,11 +834,22 @@ def main():
             initial_global_step = 0
         else:
             accelerator.print(f"Resuming from checkpoint {path}")
+            if args.require_applied_updates:
+                import json, hashlib
+                with open(os.path.join(args.output_dir,path,'v3_resume.json')) as f: resume_proof=json.load(f)
+                for filename, digest in resume_proof['files'].items():
+                    with open(os.path.join(args.output_dir,path,filename),'rb') as f:
+                        if hashlib.sha256(f.read()).hexdigest()!=digest:raise RuntimeError('V3 student resume file changed')
             accelerator.load_state(os.path.join(args.output_dir, path))
             global_step = int(path.split("-")[1])
 
             initial_global_step = global_step
             first_epoch = global_step // num_update_steps_per_epoch
+            if args.require_applied_updates:
+                if resume_proof['global_step']!=global_step:raise RuntimeError('Resume step mismatch')
+                attempted_updates,skipped_updates=resume_proof['attempted'],resume_proof['skipped']
+                resume_epoch,resume_batch=resume_proof['epoch'],resume_proof['next_batch']
+                first_epoch=resume_epoch
     else:
         initial_global_step = 0
 
@@ -840,10 +861,16 @@ def main():
         disable=not accelerator.is_local_main_process,
     )
 
-    for epoch in range(first_epoch, args.num_train_epochs):
+    epoch_limit = 2**31 if args.require_applied_updates else args.num_train_epochs
+    for epoch in range(first_epoch, epoch_limit):
+        if args.require_applied_updates and global_step >= args.max_train_steps:break
+        if args.require_applied_updates:
+            train_dataloader.set_epoch(epoch)
+            if train_dataloader.generator is not None:train_dataloader.generator.manual_seed(args.seed+epoch)
         unet.train()
         train_loss = 0.0
         for step, batch in enumerate(train_dataloader):
+            if args.require_applied_updates and epoch==resume_epoch and step<resume_batch:continue
             with accelerator.accumulate(unet):
                 # Convert images to latent space
                 latents = vae.encode(batch["pixel_values"].to(dtype=weight_dtype)).latent_dist.sample()
@@ -918,10 +945,14 @@ def main():
 
             # Checks if the accelerator has performed an optimization step behind the scenes
             if accelerator.sync_gradients:
-                progress_bar.update(1)
-                global_step += 1
                 attempted_updates += 1
                 skipped_updates += int(accelerator.optimizer_step_was_skipped)
+                if args.require_applied_updates and accelerator.optimizer_step_was_skipped:
+                    train_loss=0.0
+                    if skipped_updates>1000:raise RuntimeError('More than 1000 student overflow skips; aborting numerical failure')
+                    continue
+                progress_bar.update(1)
+                global_step += 1
                 if accelerator.is_main_process and (global_step % 100 == 0 or global_step == args.max_train_steps):
                     save_update_audit(args.output_dir, attempted_updates, skipped_updates, global_step)
                 accelerator.log({"train_loss": train_loss}, step=global_step)
@@ -970,6 +1001,18 @@ def main():
                             safe_serialization=True,
                         )
 
+                        if args.require_applied_updates:
+                            import json, hashlib
+                            files={}
+                            for directory,_,names in os.walk(save_path):
+                                for filename in names:
+                                    if filename=='v3_resume.json':continue
+                                    full=os.path.join(directory,filename)
+                                    with open(full,'rb') as f:files[os.path.relpath(full,save_path)]=hashlib.sha256(f.read()).hexdigest()
+                            proof={'global_step':global_step,'attempted':attempted_updates,'skipped':skipped_updates,
+                                   'epoch':epoch,'next_batch':step+1,'files':files}
+                            with open(os.path.join(save_path,'v3_resume.partial'),'w') as f:json.dump(proof,f)
+                            os.replace(os.path.join(save_path,'v3_resume.partial'),os.path.join(save_path,'v3_resume.json'))
                         logger.info(f"Saved state to {save_path}")
 
             logs = {"step_loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}

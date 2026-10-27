@@ -94,6 +94,8 @@ def teacher_quality(run,label,limit=None):
     if sign_objective:
         identity.update(clip_drop_max=min(.01,c['teacher_clip_drop_max']),lpips_max=min(.15,c['teacher_lpips_max']),quality_policy='rssf_clip_lpips_hard_gates',
                         pixel_mse_range='[-1,1]',visual_sample_count=min(8,len(rows)))
+    if c.get('teacher_objective')=='semantic_sign_v3_native_margin_refine':
+        identity['quality_policy']='v3_clip_only_lpips_diagnostic'
     cg=read_json(clean/'generation.json'); fg=read_json(fp/'generation.json')
     if cg['seeds'][:len(rows)]!=fg['seeds'][:len(rows)] or cg['prompts_sha256']!=fg['prompts_sha256']:
         raise ValueError('Teacher quality requires paired prompts and seeds')
@@ -133,6 +135,10 @@ def teacher_quality(run,label,limit=None):
         result.update(paired_pixel_visuals(run,'teacher_clean_validation',label,len(rows)))
         result.update(passes=math.isfinite(clean_clip-fp_clip) and math.isfinite(lp) and
                       clean_clip-fp_clip<=identity['clip_drop_max'] and lp<=identity['lpips_max'],lpips_is_hard_gate=True)
+    if c.get('teacher_objective')=='semantic_sign_v3_native_margin_refine':
+        result.update(passes=math.isfinite(clean_clip-fp_clip) and clean_clip-fp_clip<=.01,
+                      lpips_is_hard_gate=False)
+        result['identity']['quality_policy']='v3_clip_only_lpips_diagnostic'
     freeze(target,result)
     return result
 

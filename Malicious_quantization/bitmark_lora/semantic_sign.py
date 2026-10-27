@@ -1,4 +1,4 @@
-﻿"""Redundant semantic sign fingerprint and exact key-randomization evidence.
+"""Redundant semantic sign fingerprint and exact key-randomization evidence.
 
 The binomial null randomizes precommitted secret signs, conditional on a fixed
 key-independent semantic vector. It does not assume independent coordinates.
@@ -10,7 +10,7 @@ import torch
 
 SIGN_CARRIER_VERSION = 'semantic_sign_v1'
 OBJECTIVE = SIGN_CARRIER_VERSION  # Historical public carrier-version alias.
-SIGN_OBJECTIVES = {OBJECTIVE, 'semantic_sign_v2_trajectory'}
+SIGN_OBJECTIVES = {OBJECTIVE, 'semantic_sign_v2_trajectory', 'semantic_sign_v3_native_margin_refine'}
 
 
 def is_sign(config):

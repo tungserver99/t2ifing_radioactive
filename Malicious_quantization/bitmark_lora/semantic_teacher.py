@@ -13,6 +13,10 @@ def check_imports():
     import lpips
 
 
+def generation_seed(config, row):
+    return config['seed']*1000000+row['image_id']
+
+
 def native_generate(pipe, prompts, generators, steps, return_latents=False):
     # Production inference accepts only a standard merged model and ordinary inputs.
     import torch
@@ -61,7 +65,7 @@ def generate_set(run, model, split, label, pipe=None, limit=None, model_identity
         from semantic_trajectory import generate_traced_train
         return generate_traced_train(run,model,pipe,identity)
     out=run/'images'/label; out.mkdir(parents=True, exist_ok=True)
-    seeds=[c['seed']*1000000+r['image_id'] for r in rows]
+    seeds=[generation_seed(c,r) for r in rows]
     freeze(out/'generation.json', {'model_hashes': identity, 'split': split,
         'prompts_sha256': sha256(run/'prompts.json'), 'seeds': seeds, 'steps': c['inference_steps'],
         'cfg':7.5, 'resolution':512, 'batch_size':c['teacher_batch'], 'dtype':'float16',
@@ -152,7 +156,7 @@ def carrier_stage(run):
 
 
 def prompt_rows(run,label):
-    if label.startswith('trajectory_checkpoint_'):
+    if label.startswith(('trajectory_checkpoint_', 'native_margin_checkpoint_')):
         return read_json(run/'prompts.json')['validation'][:read_json(run/'config.json')['teacher_eval_n']]
     prompts=read_json(run/'prompts.json')
     if label.startswith('validation_'): return prompts['validation'][:read_json(run/'config.json')['validation_generation_n']]

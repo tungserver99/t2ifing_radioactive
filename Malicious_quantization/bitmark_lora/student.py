@@ -69,6 +69,9 @@ def training_command(config, assets, run, branch):
         cmd += ["--snapshot_steps", *map(str, config["checkpoint_steps"])]
     if branch.get("ema"):
         cmd += ["--use_ema"]
+    if config.get('teacher_objective')=='semantic_sign_v3_native_margin_refine':
+        cmd[cmd.index('--checkpointing_steps')+1]='250'
+        cmd += ['--require_applied_updates','--resume_from_checkpoint','latest','--checkpoints_total_limit','2']
     return cmd
 
 
@@ -78,6 +81,18 @@ def checkpoint_hashes(directory):
     if not files:
         raise RuntimeError(f"Training returned without a checkpoint: {directory}")
     return {str(p.relative_to(directory)): sha256(p) for p in files + configs}
+
+
+def verify_v3_updates(directory):
+    audit=read_json(directory/'optimization_audit.json')
+    if audit['applied']!=7500 or audit['global_step']!=7500:
+        raise RuntimeError('V3 student requires exactly 7500 applied updates')
+    hashes={'optimization_audit.json':sha256(directory/'optimization_audit.json')}
+    for step in (2500,5000,7500):
+        path=directory/f'snapshot-{step}'/'optimization_audit.json'
+        if read_json(path)['applied']!=step:raise RuntimeError('Student snapshot must count applied updates')
+        hashes[path.relative_to(directory).as_posix()]=sha256(path)
+    freeze(directory/'applied_update_proof.json',hashes)
 
 
 def train(run, name):
@@ -95,6 +110,13 @@ def train(run, name):
         path = run / "images" / f"teacher_{branch['condition']}_train" / entry["file_name"]
         if sha256(path) != entry["sha256"]:
             raise RuntimeError(f"Training image changed: {path}")
+    if config.get('teacher_objective')=='semantic_sign_v3_native_margin_refine':
+        from semantic_native_lineage import verify_images
+        directory=run/'images'/f"teacher_{branch['condition']}_train"
+        verify_images(directory,read_json(run/'prompts.json')['train'],config)
+        freeze(out/'rgb_caption_proof.json',{'metadata_sha256':sha256(directory/'metadata.jsonl'),
+               'images_sha256':sha256(directory/'image_hashes.json'),'prompts_sha256':sha256(run/'prompts.json'),
+               'allowed_metadata_fields':['file_name','text']})
     command = training_command(config, assets, run, branch)
     freeze(out / "protocol.json", {"command": command, "branch": branch, "training_images": expected,
                                    "selection": ("minimum held-out denoising MSE; detector and utility excluded" if config.get("checkpoint_steps")
@@ -102,6 +124,7 @@ def train(run, name):
     if (out / "complete.json").exists():
         if read_json(out / "complete.json")["checkpoints"] != checkpoint_hashes(out):
             raise RuntimeError(f"Saved checkpoint changed: {out}")
+        if config.get('teacher_objective')=='semantic_sign_v3_native_margin_refine':verify_v3_updates(out)
         print(f"Reusing verified trained student: {name}", flush=True)
         return
     # A partial run restarts deterministically. No silent selection of an earlier checkpoint.
@@ -123,6 +146,8 @@ def train(run, name):
         checkpoint_hashes(out / f"snapshot-{step}")
     audit_path = out / "optimization_audit.json"
     audit = read_json(audit_path) if audit_path.exists() else None
+    if config.get('teacher_objective')=='semantic_sign_v3_native_margin_refine':
+        verify_v3_updates(out)
     write_json(out / "complete.json", {"checkpoints": checkpoint_hashes(out), "finite_weights": True,
                                        "weights_changed_verified": True,
                                        "optimizer_update_counts": audit})
@@ -212,6 +237,9 @@ def generate_images(run, name, pipe, checkpoint, split="test", label=None):
                           (batch[j]["image_id"] if config.get("watermark_method") == "new_watermark" else
                            {"test":500000,"validation":700000,"calibration":850000}[split] + start+j))
                           for j in range(len(batch))]
+            if config.get('teacher_objective')=='semantic_sign_v3_native_margin_refine':
+                from semantic_teacher import generation_seed
+                generators=[torch.Generator('cuda').manual_seed(generation_seed(config,r)) for r in batch]
             with torch.inference_mode():
                 if config.get("watermark_method") == "semantic_fp":
                     # Same ordinary sampling and original VAE conversion; fail on

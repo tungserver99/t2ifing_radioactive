@@ -170,6 +170,10 @@ def select(run, name):
                  'test_used_for_selection': False, 'detector_used_for_selection': False,
                  'utility_used_for_selection': False}
     freeze(run/'result/selection'/f'{name}.json', selection)
+    if c.get('teacher_objective')=='semantic_sign_v3_native_margin_refine':
+        freeze(run/'result/student_selection'/f'{name}.json', {'selection':selection,
+               'milestones':[{'step':r['step'],'denoising_mse':r['denoising_mse']} for r in rows]})
+        return selection
     thresholds = read_json(run/'result/threshold.json')
     convention = thresholds.get('primary', 'absolute_z')
     threshold = thresholds[convention]

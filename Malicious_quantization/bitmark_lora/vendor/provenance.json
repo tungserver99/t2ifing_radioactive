@@ -22,7 +22,8 @@
       "Save PEFT-native adapter state/config for reliable mixed Linear+Conv2d reload.",
       "Optional PEFT use_dora for Linear+Conv2d magnitude/direction adaptation; audit magnitude parameter count. Native PEFT serialization preserved.",
       "Full trainer final export explicitly disables optional safety_checker and uses local cache, matching experiment inference.",
-      "LoRA trainer records attempted/applied/AMP-skipped optimizer updates per invocation and at inference snapshots."
+      "LoRA trainer records attempted/applied/AMP-skipped optimizer updates per invocation and at inference snapshots.",
+      "Opt-in --require_applied_updates: count applied FP16 updates, immutable snapshots, hash-audited Accelerate resume and deterministic epoch sampler; historical defaults unchanged."
     ]
   },
   "files": {
@@ -71,7 +72,7 @@
     "bitmark/helper.py": "c867f2a69a2c93a677b31b3e1c462d65816daf95cbb5b6931c6c402904ff2241",
     "diffusers/LICENSE": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
     "diffusers/train_text_to_image.py": "7973d4683f714d2b2ebf0dced77431013c0c5840a7b05d56ab5e6a814aa00a7f",
-    "diffusers/train_text_to_image_lora.py": "bf72739025211529e2ae236bd0340fe7de21726fd73f32caee70edc456bbc91e",
+    "diffusers/train_text_to_image_lora.py": "816aa1405b6255134d93447b9a0dbc51087b57685df2406824e7519d45e90f46",
     "serum/watermark.py": "f36e6f2553b136cc4ec8f8d075d1a68dc35ab414720ebcc385b1011d5c226086",
     "serum/config.py": "76ba6defacc7806581fafb3ee22f02d561e363443afc976aba0c26ff6f06fcc4",
     "serum/__init__.py": "855cf431720505996c5d617141a3d5af9730c04587cb1f711877c5456bd82a27",
