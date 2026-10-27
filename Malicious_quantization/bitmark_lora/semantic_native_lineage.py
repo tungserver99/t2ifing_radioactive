@@ -4,7 +4,7 @@ import shutil
 import re
 from pathlib import Path
 import torch
-from common import HERE, read_json, freeze, sha256, image_name
+from common import HERE, read_json, freeze, sha256, image_name, write_json
 from semantic_checkpoint import verified_state
 from semantic_carrier import SemanticCarrier
 from semantic_native_rollout import OBJECTIVE
@@ -187,6 +187,42 @@ def code_identity():
             'entrypoint_sha256':sha256(root/'main_native_margin.py')}
 
 
+def freeze_code_identity(run):
+    """Audit initialization-only bugfixes; never replace a trained run's identity."""
+    from semantic_sign_native_margin_refine import training_protocol
+    from semantic_trajectory import digest
+    target=run/'code_manifest.json';current=code_identity()
+    prior=read_json(target) if target.exists() else None
+    folder=run/'teacher_fp/native_margin_refine';protocol_path=folder/'protocol.json'
+    changed=prior is not None and prior!=current
+    old_protocol=read_json(protocol_path) if protocol_path.exists() else None
+    # Compare all non-code inputs before touching either committed file.
+    if old_protocol is not None:
+        expected=training_protocol(run)
+        key='code_manifest_json_sha256'
+        if {k:v for k,v in old_protocol.items() if k!=key}!={k:v for k,v in expected.items() if k!=key}:
+            raise RuntimeError('Initialization protocol inputs changed beyond code identity')
+    pending=old_protocol is not None and old_protocol!=training_protocol(run)
+    if changed or pending:
+        log=folder/'losses.jsonl'
+        artifacts=(any(folder.glob('checkpoint-*')) or (log.exists() and log.stat().st_size>0)
+                   or any((folder/name).exists() for name in ('smoke.json','trained.json'))
+                   or any((run/name).exists() for name in ('teacher_fp/selected.json','student_data.json','complete.json'))
+                   or any((run/'students').glob('*'))
+                   or (run/'result/teacher_screening.json').exists())
+        if artifacts:
+            raise RuntimeError('Code identity changed after training artifacts exist; use a separate run')
+        history=run/'code_updates'/digest(prior)
+        freeze(history/'code_manifest.json',prior)
+        if old_protocol is not None:freeze(history/'protocol.json',old_protocol)
+        freeze(history/'upgrade.json',{'reason':'initialization-only code update; no smoke/checkpoint/optimizer events',
+                                       'old_identity':digest(prior),'new_identity':digest(current)})
+        write_json(target,current)
+        if old_protocol is not None:write_json(protocol_path,training_protocol(run))
+    else:
+        freeze(target,current)
+
+
 def prepare(run,source,micro_batch=2,student_snapshot=None):
     from semantic_assets import snapshot_identity,verified_student_snapshot,STUDENT_REV
     lineage=source_identity(source)
@@ -223,7 +259,7 @@ def prepare(run,source,micro_batch=2,student_snapshot=None):
         raise RuntimeError('Wrong pinned SD1.4 student')
     if assets['teacher_clean_hashes']!=lineage['teacher_clean_hashes'] or assets['prompt_sha256']!=lineage['prompt_sha256']:
         raise RuntimeError('Destination reference identity differs from source')
-    freeze(run/'code_manifest.json',code_identity())
+    freeze_code_identity(run)
     freeze(run/'environment.json',{'packages':{n:importlib.metadata.version(n) for n in ('torch','diffusers','peft','transformers','accelerate','lpips')},
                                  'gpu':torch.cuda.get_device_name() if torch.cuda.is_available() else None})
     return c

@@ -118,6 +118,21 @@ def prefix_current_weight_gate(unet,ext,factory,rows,c,params):
         with torch.no_grad():target.copy_(original)
 
 
+def validate_adapter_scope(unet, adapter, matcher=None):
+    """Compare physical layers, since PEFT compacts full names into suffixes."""
+    from semantic_teacher_train import adapter_targets
+    if matcher is None:
+        from peft.tuners.tuners_utils import check_target_module_exists
+        matcher=check_target_module_exists
+    expected=set(adapter_targets(unet))
+    actual={name for name,_ in unet.named_modules() if name and matcher(adapter,name)}
+    if actual!=expected:
+        missing=sorted(expected-actual);extra=sorted(actual-expected)
+        raise RuntimeError('Source attention/non-grouped Conv2d target scope mismatch: '
+                           f'missing={missing[:8]}, extra={extra[:8]}')
+    return sorted(actual)
+
+
 def train(run):
     from peft import LoraConfig,get_peft_model_state_dict
     from safetensors.torch import load_file
@@ -149,11 +164,9 @@ def train(run):
     smoke_path=folder/'smoke.json'
     clean_gate=clean_rollout_gate(run,ext,factory) if not smoke_path.exists() else None
     unet=copy.deepcopy(ext.unet)
-    expected_targets=adapter_targets(unet)
     source=Path(c['source_run'])/'teacher_fp/trajectory/checkpoint-100'
     adapter=LoraConfig.from_pretrained(source)
-    if set(adapter.target_modules)!=set(expected_targets):
-        raise RuntimeError('Source attention/non-grouped Conv2d target scope mismatch')
+    validate_adapter_scope(unet,adapter)
     load_adapter(unet,source)
     loaded=get_peft_model_state_dict(unet);original=load_file(str(source/'adapter_model.safetensors'))
     if set(loaded)!=set(original) or any(not torch.equal(v.detach().cpu(),original[n]) for n,v in loaded.items()):
